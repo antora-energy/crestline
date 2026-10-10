@@ -1,8 +1,12 @@
-# Speed on native x86_64 (run by hand, or by pushing to the bench-x86
-# branch): crest against the C++ highs app of
-# the oracle's pinned HiGHS commit, and crest built for x86-64-v3 (AVX2,
-# as on AWS Lambda) against the generic x86_64 build. bench/perf.py, CPU
-# time, minimum of 3 alternating runs; shared runners, so ±3% is noise.
+# Speed on native Linux runners, x86_64 and arm64 (run by hand, or by
+# pushing to the bench-x86 branch): crest against the C++ highs app of the
+# oracle's pinned HiGHS commit; on x86_64 crest built for x86-64-v3 (AVX2
+# and FMA, as on AWS Lambda) against the generic x86_64 build; this branch
+# against main, a profile-guided build against the plain one (both the same
+# paths), and the default build (fused multiply-adds) against no_fma (other
+# paths).
+# bench/perf.py, CPU time, minimum of 3 alternating runs; shared runners,
+# so ±3% is noise.
 name: bench-x86
 on:
   workflow_dispatch:
@@ -11,7 +15,19 @@ on:
 
 jobs:
   bench:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            cpu: "-C target-cpu=x86-64-v3"
+          - runner: ubuntu-24.04-arm
+            cpu: ""
+    runs-on: ${{ matrix.runner }}
+    env:
+      HIGHS_DIR: ${{ github.workspace }}/highs-cpp
+      # RUSTFLAGS replaces .cargo/config.toml's flags: repeat them
+      FLAGS: -C llvm-args=-unroll-runtime=false ${{ matrix.cpu }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/checkout@v5
@@ -19,7 +35,13 @@ jobs:
           repository: asross/HiGHS
           ref: 9b1bb74466f6ee7c353a877f7a6cb907f2e686f9
           path: highs-cpp
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          path: crest-main
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools
       - name: Build the C++ highs app
         run: |
           cmake -S highs-cpp -B build-cpp -DCMAKE_BUILD_TYPE=Release \
@@ -27,14 +49,20 @@ jobs:
             -DCMAKE_C_FLAGS=-ffp-contract=off -DCMAKE_CXX_FLAGS=-ffp-contract=off \
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF
           cmake --build build-cpp --parallel 4 --target highs-bin
-      - name: Build crest (generic x86_64 and x86-64-v3)
+      - name: Build crest (exact, generic, default, PGO; main)
         run: |
-          cargo build --release --bin crest --features "libstdcxx no_fma"
+          EXACT="libstdcxx no_fma"
+          cargo build --release --bin crest --features "$EXACT"
           cp target/release/crest crest-generic
-          # RUSTFLAGS replaces .cargo/config.toml's flags: repeat them
-          RUSTFLAGS="-C llvm-args=-unroll-runtime=false -C target-cpu=x86-64-v3" \
-            cargo build --release --bin crest --features "libstdcxx no_fma"
-          cp target/release/crest crest-v3
+          RUSTFLAGS="$FLAGS" cargo build --release --bin crest --features "$EXACT"
+          cp target/release/crest crest-exact
+          # The default build: fused multiply-adds (x86-64-v3, arm64)
+          RUSTFLAGS="$FLAGS" cargo build --release --bin crest --features libstdcxx
+          cp target/release/crest crest-default
+          RUSTFLAGS="${{ matrix.cpu }}" CARGO_ARGS="--features \"$EXACT\"" bash bench/pgo_build.sh
+          cp target/release/crest crest-pgo
+          (cd crest-main && RUSTFLAGS="$FLAGS" cargo build --release --bin crest --features "libstdcxx no_fma" \
+            && cp target/release/crest ../crest-main-bin)
       - name: MIPLIB instances
         run: |
           mkdir miplib
@@ -43,6 +71,18 @@ jobs:
           done
           ls -la miplib
       - name: crest against the C++ app
-        run: HIGHS_DIR=$PWD/highs-cpp python3 bench/perf.py build-cpp/bin/highs ./crest-generic --reps 3 --miplib miplib
+        continue-on-error: true
+        run: python3 bench/perf.py build-cpp/bin/highs ./crest-generic --reps 3 --miplib miplib
       - name: x86-64-v3 against generic
-        run: HIGHS_DIR=$PWD/highs-cpp python3 bench/perf.py ./crest-generic ./crest-v3 --reps 3 --miplib miplib
+        if: matrix.cpu != ''
+        continue-on-error: true
+        run: python3 bench/perf.py ./crest-generic ./crest-exact --reps 3 --miplib miplib
+      - name: this branch against main (same paths)
+        continue-on-error: true
+        run: python3 bench/perf.py ./crest-main-bin ./crest-exact --reps 3 --miplib miplib
+      - name: PGO against plain (same paths)
+        continue-on-error: true
+        run: python3 bench/perf.py ./crest-exact ./crest-pgo --reps 3 --miplib miplib
+      - name: fused multiply-adds against no_fma (other paths)
+        continue-on-error: true
+        run: python3 bench/perf.py ./crest-exact ./crest-default --reps 3 --miplib miplib

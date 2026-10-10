@@ -455,6 +455,86 @@ The C++ HiGHS perturbs these LPs: `bench/quick_check.sh` and
 `bench/perf.py` run crest with `mip_graph_lns_cost_perturbation = true`
 against the C++ app.
 
+## Rust-specific pass of 2026-10-10 (bounds checks, PGO, FMA on x86-64-v3)
+
+**Profile** (SIGPROF PC sampler, line level, M1): on the LP relaxation
+of 3c1b60d6, `HFactor::ftran` (the dense U solve inlined) 25%,
+`solve_hyper` 18%, `Dual::iterate` 7%, `ftran_l` 7%, PRICE by row 7%,
+`update_primal` 4%, `btran` 4%; on lambda_080458 (MIP) the same kernels
+plus feasibility jump 5%; on air05, cut separation is about 40%
+(`aggr_add_row` 9%, `cmir_efficacy` 9%, gfk splay 4%).
+
+**Codegen.** The factor solves were already unchecked (`get_unchecked`
+under the documented HFactor invariant): the dense U loop is about 20
+instructions per position (a gather, the |x| > tiny branch, the pivot
+division, the fused axpy) with one predictable bounds check left. The
+samples sit on the gather, the division and the axpy's loads and stores,
+so the solves are bound by memory and mispredictions, not by checks.
+What was left: per-edge checks and an `end[hi]` reload in the
+hyper-sparse DFS, five checks per entry in `update_primal`, three in
+`update_dual`, two in CHUZR.
+
+### Same paths (every result bit for bit)
+
+| Change | Effect |
+|---|---|
+| `solve_hyper`: per-position arrays sliced to the number of positions (one check covers all), the column end kept in a register during the DFS | instructions: 3c1b60d6 relaxation 0.975, lambda_080458 0.970, dm_full_prices root 0.973 |
+| `update_primal` dense/sparse loops over arrays sliced to num_row (no checks in the dense loop); `choose_normal`, `update_dual` sliced to a common length | a further 0.979-0.997 (a closure version was outlined by LLVM: +1-3% instructions; a macro keeps it inline) |
+| `HighsLpAggregator::addRow` by the `double` overload of `add`, as the C++ (the `CDouble` one added a zero low part per entry) | air05 at 200 nodes 0.973 instructions |
+| `bench/pgo_build.sh`: profile-guided build, trained on check/instances LPs (simplex, IPX, PDLP) and MIPs plus given models | see below |
+
+The branch against main (same paths), CPU time: GitHub x86_64
+(x86-64-v3) all 0.990 (MIP 0.989, LP dual 0.987, IPX 0.977), arm64
+0.996; M1 cycles 0.998 (the M1 was shared with load 100+ for this pass,
+so its cycle counts are about ±3%; instructions on the dispatch cases
+0.956-0.974). The bounds-check work is worth about 1% in time: the checks
+were predictable.
+
+PGO against the plain build (same paths): GitHub x86_64 all 0.978 (MIP
+0.977, LP dual 0.979, IPX 0.972, read 0.826, PDLP 1.055), arm64 0.972
+(MIP 0.973, LP dual 0.963); M1 0.964 and the fixed-work dispatch cases
+0.991. It needs training runs at build time, so it is a script, not the
+default build.
+
+### Numerics: fused multiply-adds on x86-64-v3 (kept, default)
+
+`mul_add_c` now fuses wherever the CPU has FMA: aarch64 as before, and
+x86_64 built with `target-feature=fma` (x86-64-v3, the Lambda build). The
+x86-64-v3 build then takes the arm64 build's paths: under Rosetta it
+matches the clang arm64 C++ app on all of quick_check (73 solves, 166
+command lines). `no_fma` keeps HiGHS's unfused arithmetic (gcc
+`-ffp-contract=off`, the default x86_64 C++ build), and the CI oracle
+builds with it, so it is unchanged. Fused against no_fma (other paths,
+perf.py, GitHub): x86_64 all 0.966 (MIP 0.950, LP 1.00, IPX 0.858), arm64
+0.956 (MIP 0.936, LP 0.99, IPX 0.840); the LP cases are even, the MIP
+and IPX gains are path differences as much as arithmetic.
+
+**Dispatch suite, paired on GitHub runners** (`bench-dispatch.yml`,
+main against this branch, 25 models x 16 seeds, 1 thread, 180 s, run
+38082983814): arm64 (same paths) time 0.984 over the 24 instances solved
+by both, every gap the same, primal integral slightly lower everywhere;
+x86_64 (x86-64-v3, other paths through FMA) time 0.967, solved 371 -> 370
+runs (`diverse_10-01` 3 -> 2 of 16 within the limit), end gaps within
+noise (hard_10-03 +0.016 ± 0.078%, primal integral -0.196 ± 0.141%).
+
+### Numerics: tried and rejected
+
+- Global contraction (`-C llvm-args=-fp-contract=fast`, which rustc
+  honours): it would fuse inside `CDouble`'s Veltkamp split and error-free
+  products, which need the unfused rounding; and on arm64 it adds only
+  ~140 fused sites to the ~1640 the port has already.
+- Reciprocal U pivots (multiply by stored 1/pivot instead of dividing in
+  the U solves): the 25 dispatch LP relaxations took 1.014 of the cycles,
+  0.998 per simplex iteration: the division is not on the critical path.
+- Partial sums (four or two accumulators) in `HVec::norm2` (DSE weights),
+  `update_dual`'s objective change, `cmir_efficacy`'s violation and norm
+  and column-wise PRICE: LP relaxations 0.976 cycles (0.990 per
+  iteration); dispatch suite (16 seeds, 180 s, instructions, geometric mean
+  over seeds then instances) 0.975 over 23 solved models, 363 against 362
+  optimal runs, but `hard_10-03` mean gap 1.771% -> 1.883% and MIPLIB (8
+  instances, 4 seeds) 1.22, air05 1.25 over 6 seeds (5 slower; not the
+  cmir or PRICE sums). Not a robust gain, so not kept.
+
 ## Other platforms
 
 - **gcc / libstdc++.** With the `libstdcxx` and `no_fma` features, Crestline
@@ -464,7 +544,9 @@ against the C++ app.
   Against such a build on the M1 (2026-10-06, heavily loaded machine, one
   rep): all 0.824, MIP 0.868, every case same path.
 - **x86_64.** Fused multiply-adds that clang makes on arm64 are mirrored
-  only on aarch64, so x86_64 builds take the x86_64 C++ paths. Under Rosetta
+  on aarch64 and (since the 2026-10-10 Rust pass) on x86_64 built with
+  FMA (x86-64-v3); the generic x86_64 build and `no_fma` take the x86_64
+  C++ paths. Under Rosetta
   2 (translated code, indicative only): every case same path, all 0.775.
   On native x86_64 (AWS Lambda, gcc builds, a dispatch MILP suite, with the
   port then part Rust and part C++): 0.945
@@ -478,7 +560,9 @@ against the C++ app.
   0.942, IPX 0.942, PDLP 0.676, read 0.330, all 0.776. Built for
   x86-64-v3 (AVX2, as on Lambda) against the generic x86_64 build: MIP
   0.957, LP dual simplex 0.952, LP primal 0.961, IPX 0.975, all 0.965,
-  every case same path (Rust never fuses multiply-adds, so the target
-  changes no result; the CI oracle checks the v3 build too).
+  every case same path (both with `no_fma`; the CI oracle checks the v3
+  build too). The default x86-64-v3 build fuses: see the Rust-specific
+  pass above. On GitHub's arm64 runner (`ubuntu-24.04-arm`), crest
+  against the same gcc C++ build: all 0.775 (MIP 0.805, LP dual 0.760).
 - **CI** checks crest against a gcc build of the C++ app on Linux x86_64
   on every push (see the README).

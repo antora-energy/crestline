@@ -14,14 +14,20 @@ See below for instructions, additional details, and performance comparisons from
     cargo build --release
 
 The `crest` binary lands in `target/release/crest`. For x86_64 machines
-with AVX2 (AWS Lambda, most servers since 2015), building for x86-64-v3
-is about 3.5% faster and takes the same paths (Rust never fuses
-multiply-adds on its own):
+with AVX2 and FMA (AWS Lambda, most servers since 2015), build for
+x86-64-v3:
 
     RUSTFLAGS="-C llvm-args=-unroll-runtime=false -C target-cpu=x86-64-v3" cargo build --release
 
 (`RUSTFLAGS` replaces the flags of `.cargo/config.toml`, so they are
-repeated.) It is all Rust (no C++
+repeated.) That build fuses multiply-adds as the arm64 build does, so an
+x86-64-v3 machine and an Apple silicon Mac take the same paths.
+`bench/pgo_build.sh` makes a profile-guided build (same results, about
+2-3% faster; it can train on your own models).
+
+Cargo features: `no_fma` never fuses multiply-adds (as a C++ build without
+FMA instructions, or gcc with `-ffp-contract=off`); `libstdcxx` follows
+libstdc++'s tie orders instead of libc++'s. It is all Rust (no C++
 compiler needed); its only crates.io dependency is flate2 (pure-Rust
 miniz_oxide backend) for gzip-compressed model files.
 
@@ -78,6 +84,7 @@ CI (`.github/workflows/ci.yml`) runs on Linux x86_64:
   written files.
 
 Locally, against a clang build of the C++ app on macOS, default features
-match: `HIGHS_DIR=<HiGHS checkout> bench/quick_check.sh <highs> target/release/crest`.
+match (and so does an x86-64-v3 build under Rosetta): `HIGHS_DIR=<HiGHS
+checkout> bench/quick_check.sh <highs> target/release/crest`.
 
 _Crestline is MIT-licensed; it derives from HiGHS (Copyright (c) HiGHS developers, MIT)._

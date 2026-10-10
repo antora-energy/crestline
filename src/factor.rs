@@ -84,23 +84,31 @@ pub struct Triangle<'a> {
 /// invariant), so that its entries are rows < h_size and its ranges valid
 unsafe fn solve_hyper(h_size: usize, h: &Triangle, rhs: &mut HVec) {
     assert!(rhs.array.len() >= h_size && h.lookup.len() >= h_size);
+    // Pivot positions are < npos: slicing every per-position array to npos
+    // lets one bounds check per position cover them all
+    let npos = h.start.len().min(h.end.len()).min(h.pivot_index.len());
+    let (start, end, pivot_index) = (&h.start[..npos], &h.end[..npos], &h.pivot_index[..npos]);
+    let pivot_value = h.pivot_value.map(|p| &p[..npos]);
     let (list_index, list_stack) = rhs.iwork.split_at_mut(h_size);
-    let mark = &mut *rhs.cwork;
+    let mark = &mut rhs.cwork[..npos];
     let mut list_count = 0;
     let mut count_pivot = 0usize;
     let mut count_entry = 0usize;
 
-    // Depth-first search for the topological order of the nonzeros
+    // Depth-first search for the topological order of the nonzeros. The
+    // end of the current column is kept in hend, so following an entry
+    // loads only its row's position and mark
     for &row in &rhs.index[..rhs.count as usize] {
         let mut hi = h.lookup[row as usize] as usize;
         if mark[hi] != 0 {
             continue;
         }
-        let mut hk = h.start[hi] as usize;
+        let mut hk = start[hi] as usize;
+        let mut hend = end[hi] as usize;
         let mut n_stack = 0;
         mark[hi] = 1;
         loop {
-            if hk < h.end[hi] as usize {
+            if hk < hend {
                 // SAFETY: hk < end <= index.len() (range invariant), and
                 // the entry is a row < h_size <= lookup.len()
                 let sub = *h.lookup.get_unchecked(*h.index.get_unchecked(hk) as usize) as usize;
@@ -111,10 +119,11 @@ unsafe fn solve_hyper(h_size: usize, h: &Triangle, rhs: &mut HVec) {
                     list_stack[n_stack + 1] = hk as i32;
                     n_stack += 2;
                     hi = sub;
-                    hk = h.start[hi] as usize;
+                    hk = start[hi] as usize;
+                    hend = end[hi] as usize;
                     if hi >= h_size {
                         count_pivot += 1;
-                        count_entry += (h.end[hi] - h.start[hi]) as usize;
+                        count_entry += (end[hi] - start[hi]) as usize;
                     }
                 }
             } else {
@@ -126,6 +135,7 @@ unsafe fn solve_hyper(h_size: usize, h: &Triangle, rhs: &mut HVec) {
                 n_stack -= 2;
                 hi = list_stack[n_stack] as usize;
                 hk = list_stack[n_stack + 1] as usize;
+                hend = end[hi] as usize;
             }
         }
     }
@@ -133,22 +143,23 @@ unsafe fn solve_hyper(h_size: usize, h: &Triangle, rhs: &mut HVec) {
 
     // Solve in reverse topological order
     let mut count = 0;
+    let out_index = &mut rhs.index[..];
     for &i in list_index[..list_count].iter().rev() {
         let i = i as usize;
         mark[i] = 0;
-        let pivot_row = h.pivot_index[i];
+        let pivot_row = pivot_index[i];
         // SAFETY (pivot_row, and the column's rows and range): HFactor
         // invariant, see the function's safety condition
         let x = rhs.array.get_unchecked_mut(pivot_row as usize);
         let mut multiplier = *x;
         if multiplier.abs() > K_HIGHS_TINY {
-            if let Some(pivot_value) = h.pivot_value {
+            if let Some(pivot_value) = pivot_value {
                 multiplier /= pivot_value[i];
                 *x = multiplier;
             }
-            rhs.index[count] = pivot_row;
+            out_index[count] = pivot_row;
             count += 1;
-            let (idx, val) = entries(h.index, h.value, h.start[i], h.end[i]);
+            let (idx, val) = entries(h.index, h.value, start[i], end[i]);
             axpy_unchecked(rhs.array, idx, val, multiplier);
         } else {
             *x = 0.0;
