@@ -89,7 +89,7 @@ pub struct LnsMove {
 /// The deep search's choice of move type: each once, then the best rate
 /// of gap closed per LP iteration plus an exploration bonus. Counts the
 /// try in `deep_tries`.
-pub fn select_type(types: &[LnsMove; 4], deep_tries: &mut [i32; 4], flips_exhausted: bool) -> usize {
+pub fn select_type(types: &[LnsMove; 5], deep_tries: &mut [i32; 5], flips_exhausted: bool, pool_ok: bool) -> usize {
     let mut max_rate = 0.0;
     let mut num_tried = 0;
     for t in types {
@@ -101,7 +101,7 @@ pub fn select_type(types: &[LnsMove; 4], deep_tries: &mut [i32; 4], flips_exhaus
     let mut best_score = -1.0;
     let mut ty = 3;
     for (t, m) in types.iter().enumerate() {
-        if t == 2 && flips_exhausted {
+        if (t == 2 && flips_exhausted) || (t == 4 && !pool_ok) {
             continue;
         }
         let score = if m.tried == 0 || (deep_tries[t] == 0 && t != 3) {
@@ -291,6 +291,18 @@ impl Lns {
                 }
                 std::mem::swap(&mut self.frontier, &mut self.next);
             }
+        }
+    }
+
+    /// A given neighbourhood (the pool recombination move)
+    pub fn set(&mut self, cols: &[i32]) {
+        for &c in &self.neighbourhood {
+            self.in_n[c as usize] = 0;
+        }
+        self.neighbourhood.clear();
+        self.neighbourhood.extend_from_slice(cols);
+        for &c in cols {
+            self.in_n[c as usize] = 1;
         }
     }
 

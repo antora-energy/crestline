@@ -359,6 +359,33 @@ impl GraphLns<'_> {
         nodes
     }
 
+    /// Adds a new incumbent to the pool of the last POOL_SIZE, and lists
+    /// the decision columns where a pooled one differs from it
+    fn update_pool(&mut self, decisioncols: &[i32], cols: &mut Vec<i32>) {
+        const POOL_SIZE: usize = 4;
+        let m = self.m;
+        let inc = m.incumbent();
+        if inc.len() != self.n {
+            cols.clear();
+            return;
+        }
+        let h = &mut *self.h;
+        if m.upper_bound() < h.lns_pool_obj {
+            h.lns_pool_obj = m.upper_bound();
+            if h.lns_pool.len() == POOL_SIZE {
+                h.lns_pool.remove(0);
+            }
+            h.lns_pool.push(inc.to_vec());
+        }
+        cols.clear();
+        for &c in decisioncols {
+            let col = c as usize;
+            if h.lns_pool.iter().any(|p| (p[col] - inc[col]).abs() > 0.5) {
+                cols.push(c);
+            }
+        }
+    }
+
     fn flips_exhausted(&self) -> bool {
         self.m.upper_bound() == self.h.lns_flip_obj && self.h.lns_flip_next == -1
     }
@@ -740,7 +767,9 @@ impl Heur {
                 mv.size = if t == 3 { dive_size0 } else { dfs_size0 };
             }
         }
-        let mut deep_tries = [0i32; 4];
+        let mut deep_tries = [0i32; 5];
+        let pool_moves = deep && m.opts.mip_graph_lns_pool_moves;
+        let mut pool_cols: Vec<i32> = Vec::new();
         s.screen = Dom::copy(&gd);
         let mut it = 0;
         while since < max_stall && it < max_it {
@@ -756,10 +785,16 @@ impl Heur {
             // the quick search only dives; the deep search tries each type
             // once, then mostly the one closing the most gap per LP
             // iteration recently
+            // the pool recombination move: the decision columns where a
+            // recent incumbent disagrees with the current one
+            if pool_moves {
+                s.update_pool(&decisioncols, &mut pool_cols);
+            }
             let mut ty = 3;
             if deep {
                 let fe = s.flips_exhausted();
-                ty = select_type(&s.h.lns_moves, &mut deep_tries, fe);
+                let pool_ok = pool_cols.len() as f64 >= dfs_min_size;
+                ty = select_type(&s.h.lns_moves, &mut deep_tries, fe, pool_ok);
             }
             let dived = ty == 3;
             if ty == 2 {
@@ -801,7 +836,15 @@ impl Heur {
                 // graph LNS runs outside the parallel lock: the heuristics'
                 // own generator
                 let rng = s.h.own_rng();
-                s.lns.build(&s.g, ty as i32, size.max(0) as usize, deep, m.incumbent(), relaxationsol, glo, gup, rng);
+                if ty == 4 {
+                    // a random part of the disagreement, if it is too large
+                    pool_cols.retain(|&c| glo[c as usize] != gup[c as usize]);
+                    rng.shuffle(&mut pool_cols);
+                    pool_cols.truncate(size.max(0) as usize);
+                    s.lns.set(&pool_cols);
+                } else {
+                    s.lns.build(&s.g, ty as i32, size.max(0) as usize, deep, m.incumbent(), relaxationsol, glo, gup, rng);
+                }
             }
             let neighbourhood = s.lns.neighbourhood.clone();
 
@@ -937,6 +980,9 @@ impl Heur {
             t[3].improved,
             t[3].tried
         );
+        if pool_moves {
+            crate::log_dev!(log, LogType::Info, "%s pool recombination: improved by %d/%d\n", who, t[4].improved, t[4].tried);
+        }
         s.charge_iterations();
     }
 }

@@ -100,6 +100,9 @@ pub mod heur {
     pub const SHIFTING_ROOT: i64 = 10;
     pub const RANDOMIZED_ROUNDING_LP: i64 = 11;
     pub const SHIFTING_LP: i64 = 12;
+    /// the deep graph LNS search from the first LP solution, with an LP
+    /// iteration budget (the op's value; negative: the usual one)
+    pub const GRAPH_LNS_DEEP_FIRST: i64 = 13;
 }
 
 /// The profiling clocks (indices of HighsPrimalHeuristics.cpp's
@@ -355,6 +358,37 @@ impl MipData {
                     let skip = sc.lns_quick_improved
                         && sc.upper_bound - sc.lower_bound <= 3.0 * (sc.upper_bound - sc.optimality_limit);
                     self.oi(op::SET_SKIP_ANALYTIC_CENTER, skip as i64);
+                    // mip_graph_lns_deep_early: with the gap still large, the
+                    // deep search now (a helper thread runs it anyway), one
+                    // root LP's worth of LP iterations, continued while it
+                    // pays; the cut loop can take the rest of the time limit
+                    let sc = self.sc();
+                    if o.mip_graph_lns_deep_early
+                        && !self.submip
+                        && self.own_lns().is_none()
+                        && sc.upper_bound < INF
+                        && sc.upper_bound - sc.lower_bound > 3.0 * (sc.upper_bound - sc.optimality_limit)
+                    {
+                        let budget = 5000i64.max(sc.firstrootlpiters);
+                        let it0 = self.op(op::WORKER_HEUR_LP_ITERATIONS, Some(w), 0, 0.0);
+                        // a round that closes 1% of the gap earns another
+                        let paid = |m: &MipData, ub: f64| m.sc().upper_bound < ub - 0.01 * (ub - m.sc().lower_bound);
+                        let mut ub = sc.upper_bound;
+                        self.op(op::HEUR, Some(w), heur::GRAPH_LNS_DEEP_FIRST, budget as f64);
+                        while paid(self, ub) && !self.check_limits_rs(0) {
+                            ub = self.sc().upper_bound;
+                            self.op(op::HEUR, Some(w), heur::GRAPH_LNS_DEEP_FIRST, -1.0);
+                        }
+                        let sc = self.sc();
+                        sc.lns_quick_improved = sc.upper_bound < before;
+                        crate::log_dev!(
+                            self.log,
+                            LogType::Info,
+                            "Early deep graph LNS: objective %.6g, %lld LP iterations\n",
+                            sc.upper_bound,
+                            (self.op(op::WORKER_HEUR_LP_ITERATIONS, Some(w), 0, 0.0) - it0) as i64
+                        );
+                    }
                 }
                 self.concurrent_main_quick_done();
                 self.crossover_with_main(w);
