@@ -52,6 +52,10 @@ def run(binary, inst, opts):
     with tempfile.NamedTemporaryFile("w", suffix=".opts", delete=False) as f:
         f.write("threads = 1\nrandom_seed = 0\n")
         f.writelines(f"{k} = {v}\n" for k, v in opts.items())
+        # crest (by its file name) with the C++ app's setting of its own
+        # options that change paths
+        if "crest" in Path(binary).name:
+            f.write("mip_graph_lns_cost_perturbation = true\n")
     try:
         if sys.platform == "darwin":
             r = subprocess.run(["/usr/bin/time", "-l", binary, "--options_file", f.name, str(inst)],

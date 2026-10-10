@@ -589,7 +589,7 @@ options! {
     mip_concurrent_helper: bool = true;
     mip_concurrent_crossover: bool = false;
     mip_root_lp_devex: bool = false;
-    mip_graph_lns_cost_perturbation: bool = true;
+    mip_graph_lns_cost_perturbation: bool = false;
     mip_heuristic_run_root_reduced_cost: bool = true;
     mip_heuristic_run_zi_round: bool = false;
     mip_heuristic_run_shifting: bool = false;
