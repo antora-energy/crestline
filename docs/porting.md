@@ -111,8 +111,9 @@ Checks cost: run the cheap ones per change, the expensive ones per batch.
 - **x86_64.** Production runs on x86_64, where the default C++ build has no
   FMA instructions and clang fuses nothing (and the blocked reductions are
   then plain in-order sums). So write every mirrored FMA as
-  `x.mul_add_c(a, b)` (util/fma.rs): `mul_add` on aarch64, `x * a + b`
-  elsewhere. A test rejects raw `mul_add`. Check x86_64 paths with
+  `x.mul_add_c(a, b)` (util/fma.rs): `mul_add` on aarch64 and on x86_64
+  built with FMA (x86-64-v3; since 2026-10-10, so that it takes the arm64
+  paths), `x * a + b` elsewhere or with `no_fma`. A test rejects raw `mul_add`. Check x86_64 paths with
   `-DCMAKE_OSX_ARCHITECTURES=x86_64 -DHIGHS_RUST_TARGET=x86_64-apple-darwin`
   builds under Rosetta (`bench/perf.py` on both).
 - **gcc / libstdc++.** Production builds the C++ with gcc, whose libstdc++

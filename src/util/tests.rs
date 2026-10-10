@@ -41,8 +41,8 @@ fn random_matches_cpp() {
         h.mixd(r.real(-3.5, 1e3));
         h.mix(r.bit() as u64);
     }
-    // HighsRandom::real is fused on arm64 only (see util/fma.rs)
-    let expected = if cfg!(target_arch = "aarch64") { 16995212409544007823 } else { 6400714799036924485 };
+    // HighsRandom::real is fused where mul_add_c is (see util/fma.rs)
+    let expected = if crate::util::fma::FUSED { 16995212409544007823 } else { 6400714799036924485 };
     assert_eq!(h.0, expected);
 }
 
