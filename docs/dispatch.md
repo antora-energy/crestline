@@ -47,7 +47,8 @@ the columns that determine them.
 **Deep search** (after the root cuts, before the sub-MIP heuristics, only
 if the quick search improved the incumbent and brought it within three
 times the target gap of the bound; otherwise the model does not suit graph
-LNS and the usual root heuristics run). Neighbourhoods are smaller and are
+LNS and the usual root heuristics run; but see `mip_graph_lns_deep_early`
+below). Neighbourhoods are smaller and are
 searched by a depth-first branch and bound with a node limit (300 LP
 solves), their size adapting to what that limit exhausts. A UCB bandit
 picks, among four moves, the one closing the most gap per LP iteration:
@@ -95,6 +96,49 @@ non-deterministic:
   integer columns where they agree are fixed and the rest solved as a
   sub-MIP.
 
+## When the quick search never searched (`mip_graph_lns_deep_early`)
+
+The deep search's gate reads "the quick search did not improve" as "the
+model does not suit graph LNS". That holds only if the quick search tried
+neighbourhoods. On `uccase9` (MIPLIB 2017, unit commitment) its root dive
+from the LP point uses up the whole quick budget (the dive was not
+checked against it), so not one neighbourhood is tried, the gate stays
+shut, and one thread keeps the randomized-rounding incumbent (63% gap) for
+180 s while the root cut loop runs. With the option:
+- the quick search's dives stop at its LP iteration budget, like its
+  neighbourhoods;
+- if the quick search then tried no neighbourhood and the gap is above
+  three times the target, the main solver runs the deep search right
+  away (before the root cuts) on one root LP's worth of LP iterations
+  (at least 5000), and again while a round closes 1% of the gap. A
+  helper thread, when there is one, runs the deep search anyway, so the
+  option does nothing there.
+
+It changes nothing where the quick search tried a neighbourhood: on the
+dispatch ticks (no run of 400 fired it on the M1) and on all but three of
+47 MIPLIB instances.
+
+## MIPLIB unit commitment models
+
+`uccase9`, `unitcal_7`, `irish-electricity` and `buildingenergy` (MIPLIB
+2017, public; the `bench-dispatch` workflow downloads them for the
+instance glob `miplib/*.mps.gz`) are unit commitment and energy models
+with features the dispatch ticks lack. One thread, 1%, 180 s:
+- `unitcal_7`: reaches 1% (about 22 s on the M1).
+- `uccase9`: see above.
+- `irish-electricity`: no LNS: the graph-LNS dive fails (a rounding and
+  its opposite both infeasible after 7.4k LP iterations), randomized
+  rounding and feasibility jump find nothing; the first solution comes
+  from RENS after the root cut loop (about 16 rounds). On a quiet M1 that
+  is at about 115 s (3751505, 0.75% above the optimum); on a loaded
+  machine or a slower core it is after 180 s, which is the "no solution"
+  of the MIPFEAS notes. HiGHS 1.12 found it the same way at 57 s.
+- `buildingenergy`: the root LP alone is about the limit: 241k dual
+  simplex iterations (1155G instructions; HiGHS 1.15.1 takes 245k and
+  104 s on a Core Ultra 9). IPX is far worse here (9 interior point
+  iterations in 2000G instructions: its starting basis construction), as
+  is the primal simplex. No cheap fix.
+
 ## Cheaper LP re-solves
 
 Graph LNS and branch and bound solve many LPs of a few iterations each, so
@@ -132,6 +176,8 @@ integer column at a fractional value, which cannot give a violated cut
 | `mip_graph_lns_cost_perturbation` | false: graph LNS's LP solves without dual cost perturbation (true as in HiGHS; see [performance.md](./performance.md)) |
 | `mip_root_lp_ipx` | false (see [performance.md](./performance.md)) |
 | `mip_root_lp_effort_from_basis` | false (see [performance.md](./performance.md)) |
+| `mip_graph_lns_deep_early` | false (see above and [performance.md](./performance.md)) |
+| `mip_graph_lns_pool_moves` | false (see [performance.md](./performance.md)) |
 | `simplex_dse_exact_init_max_rows` | no limit (20000 in the MIP's LP relaxation) |
 | `simplex_keep_random_vectors` | false (true in the MIP's LP relaxation) |
 | `full_lp_kkt_check` | true (false in the MIP's LP relaxation) |

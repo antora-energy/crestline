@@ -425,5 +425,21 @@ mod tests {
         let cur = [1.0, 0.0, 1.0];
         lns.find_partners(&g, 1, &cur, &z, &[1.0; 3], &[-1.0, -2.0, -3.0]);
         assert_eq!(lns.partners.iter().map(|p| p.1).collect::<Vec<_>>(), vec![0, 2]);
+        // the pool move's seeds come first: from x2 alone, size 1
+        lns.pool_seeds = vec![2];
+        lns.build(&g, 4, 1, true, &z, &z, &z, &[1.0; 3], &mut rng);
+        assert_eq!(lns.neighbourhood, vec![2]);
+        assert!(lns.pool_seeds.is_empty());
+    }
+
+    #[test]
+    fn pool_move_only_when_available() {
+        let t = [LnsMove { tried: 1, rate: 0.1, ..Default::default() }; 5];
+        let mut tries = [1; 5];
+        let pick = |ok| (0..20).map(|_| select_type(&t, &mut tries.clone(), false, ok)).any(|ty| ty == 4);
+        assert!(!pick(false));
+        let mut t4 = t;
+        t4[4].tried = 0;
+        assert_eq!(select_type(&t4, &mut tries, false, true), 4);
     }
 }
