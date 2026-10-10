@@ -129,6 +129,8 @@ pub struct Lns {
     promise: Vec<f64>,
     promise_total: f64,
     pub neighbourhood: Vec<i32>,
+    /// seeds to take first (the pool recombination move)
+    pub pool_seeds: Vec<i32>,
     frontier: Vec<i32>,
     next: Vec<i32>,
     touched_rows: Vec<i32>,
@@ -173,6 +175,7 @@ impl Lns {
             promise: vec![0.0; num_col],
             promise_total: 0.0,
             neighbourhood: Vec::new(),
+            pool_seeds: Vec::new(),
             frontier: Vec::new(),
             next: Vec::new(),
             touched_rows: Vec::new(),
@@ -185,6 +188,12 @@ impl Lns {
     /// pickSeed
     fn pick_seed(&mut self, deep: bool, inc: &[f64], relax: &[f64], glo: &[f64], gup: &[f64], rng: &mut HighsRandom) -> i32 {
         let mut seed: i32 = -1;
+        // the pool recombination move's seeds first
+        while let Some(c) = self.pool_seeds.pop() {
+            if self.in_n[c as usize] == 0 && glo[c as usize] != gup[c as usize] {
+                return c;
+            }
+        }
         let r = if deep { rng.fraction() } else { 0.5f64.mul_add_c(rng.fraction(), 0.5) };
         if r < 0.5 && self.promise_total > 0.0 {
             let mut pick = rng.fraction() * self.promise_total;

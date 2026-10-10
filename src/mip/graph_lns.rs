@@ -793,7 +793,7 @@ impl Heur {
             let mut ty = 3;
             if deep {
                 let fe = s.flips_exhausted();
-                let pool_ok = pool_cols.len() as f64 >= dfs_min_size;
+                let pool_ok = !pool_cols.is_empty();
                 ty = select_type(&s.h.lns_moves, &mut deep_tries, fe, pool_ok);
             }
             let dived = ty == 3;
@@ -836,14 +836,23 @@ impl Heur {
                 // graph LNS runs outside the parallel lock: the heuristics'
                 // own generator
                 let rng = s.h.own_rng();
+                let mut given = false;
                 if ty == 4 {
-                    // a random part of the disagreement, if it is too large
+                    // the disagreement (a random part of it if too large),
+                    // grown by breadth-first search if too small
                     pool_cols.retain(|&c| glo[c as usize] != gup[c as usize]);
                     rng.shuffle(&mut pool_cols);
-                    pool_cols.truncate(size.max(0) as usize);
-                    s.lns.set(&pool_cols);
-                } else {
+                    given = pool_cols.len() >= size.max(1) as usize;
+                    if given {
+                        pool_cols.truncate(size.max(1) as usize);
+                        s.lns.set(&pool_cols);
+                    } else {
+                        s.lns.pool_seeds = pool_cols.clone();
+                    }
+                }
+                if !given {
                     s.lns.build(&s.g, ty as i32, size.max(0) as usize, deep, m.incumbent(), relaxationsol, glo, gup, rng);
+                    s.lns.pool_seeds.clear();
                 }
             }
             let neighbourhood = s.lns.neighbourhood.clone();
