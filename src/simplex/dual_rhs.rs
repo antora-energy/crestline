@@ -26,23 +26,27 @@ impl Primal<'_> {
     /// The primal infeasibility of row i, as stored in work_infeasibility
     #[inline]
     fn infeasibility(&self, i: usize) -> f64 {
-        let value = self.base_value[i];
-        let lower = self.base_lower[i];
-        let upper = self.base_upper[i];
-        // Selects rather than branches: which case holds is unpredictable
-        let (below, above) = (lower - value, value - upper);
-        let primal_infeasibility = if value < lower - self.tp {
-            below
-        } else if value > upper + self.tp {
-            above
-        } else {
-            0.0
-        };
-        if self.squared {
-            primal_infeasibility * primal_infeasibility
-        } else {
-            primal_infeasibility.abs()
-        }
+        infeasibility(self.base_value[i], self.base_lower[i], self.base_upper[i], self.tp, self.squared)
+    }
+}
+
+/// The primal infeasibility of a value within bounds (feasibility
+/// tolerance tp), squared or absolute
+#[inline]
+fn infeasibility(value: f64, lower: f64, upper: f64, tp: f64, squared: bool) -> f64 {
+    // Selects rather than branches: which case holds is unpredictable
+    let (below, above) = (lower - value, value - upper);
+    let primal_infeasibility = if value < lower - tp {
+        below
+    } else if value > upper + tp {
+        above
+    } else {
+        0.0
+    };
+    if squared {
+        primal_infeasibility * primal_infeasibility
+    } else {
+        primal_infeasibility.abs()
     }
 }
 
@@ -92,7 +96,8 @@ impl DualRhs {
         if self.work_count == 0 {
             return -1;
         }
-        let infeas = &self.work_infeasibility;
+        let infeas = &self.work_infeasibility[..];
+        let edge_weight = &edge_weight[..infeas.len()];
         let mut best_merit = 0.0;
         let mut best_index = -1;
         let mut consider = |i_row: usize| {
@@ -268,20 +273,31 @@ impl DualRhs {
     ) -> bool {
         let mut num_excessive_primal = 0;
         let in_dense = column_count < 0 || column_count as f64 > 0.4 * num_row as f64;
-        let to_entry = if in_dense { num_row } else { column_count } as usize;
-        for i_entry in 0..to_entry {
-            let i_row = if in_dense {
-                i_entry
-            } else {
-                column_index[i_entry] as usize
-            };
-            // Fused by clang
-            p.base_value[i_row] = (-theta).mul_add_c(column_array[i_row], p.base_value[i_row]);
-            self.work_infeasibility[i_row] = p.infeasibility(i_row);
-            if p.base_value[i_row] <= -K_EXCESSIVE_PRIMAL_VALUE
-                || p.base_value[i_row] >= K_EXCESSIVE_PRIMAL_VALUE
-            {
-                num_excessive_primal += 1;
+        // Every array sliced to num_row: the dense loop then needs no bounds
+        // checks, the sparse one a single check per entry
+        let n = num_row as usize;
+        let (work_infeasibility, column_array) = (&mut self.work_infeasibility[..n], &column_array[..n]);
+        let (base_value, base_lower, base_upper) = (&mut p.base_value[..n], &p.base_lower[..n], &p.base_upper[..n]);
+        let (tp, squared) = (p.tp, p.squared);
+        macro_rules! update {
+            ($i_row:expr) => {{
+                let i_row = $i_row;
+                // Fused by clang
+                let value = (-theta).mul_add_c(column_array[i_row], base_value[i_row]);
+                base_value[i_row] = value;
+                work_infeasibility[i_row] = infeasibility(value, base_lower[i_row], base_upper[i_row], tp, squared);
+                if value <= -K_EXCESSIVE_PRIMAL_VALUE || value >= K_EXCESSIVE_PRIMAL_VALUE {
+                    num_excessive_primal += 1;
+                }
+            }};
+        }
+        if in_dense {
+            for i_row in 0..n {
+                update!(i_row);
+            }
+        } else {
+            for &i in &column_index[..column_count as usize] {
+                update!(i as usize);
             }
         }
         num_excessive_primal == 0

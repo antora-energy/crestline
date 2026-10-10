@@ -403,6 +403,9 @@ impl DualRow {
         cost_scale: f64,
     ) -> f64 {
         let mut dual_objective_value_change = 0.0;
+        // Same lengths, so one bounds check per entry covers all three
+        let n = work_dual.len();
+        let (work_value, nonbasic_flag) = (&work_value[..n], &nonbasic_flag[..n]);
         for (&i_col, &value) in self.pack_index[..pack_count].iter().zip(&self.pack_value[..pack_count]) {
             let i_col = i_col as usize;
             work_dual[i_col] = (-theta).mul_add_c(value, work_dual[i_col]);
