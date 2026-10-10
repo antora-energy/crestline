@@ -10,6 +10,7 @@ use super::domain::{DomChg as Chg, Reason, LOWER as LO, REASON_BRANCHING, UPPER 
 use super::glue::{self, lp_status, source, Bnd, Dom, Lp, MipData, Worker};
 use super::lns::{decision_cols, select_type, Graph, Lns};
 use super::primal::{cmax, cmin, Heur};
+use crate::lp_data::opts::OptValue;
 use crate::lp_data::LogType;
 use crate::util::fma::ClangFma;
 
@@ -651,6 +652,12 @@ impl Heur {
         lp.set_adjust_symmetric_branching_col(false);
         if !m.opts.graph_lns_cost_perturbation {
             lp.set_option(4);
+        } else if m.opts.graph_lns_cost_perturbation_multiplier != 1.0 {
+            let x = m.opts.graph_lns_cost_perturbation_multiplier;
+            lp.set_named_option("dual_simplex_cost_perturbation_multiplier", OptValue::Double(x));
+        }
+        if !m.opts.graph_lns_primal_cleanup {
+            lp.set_named_option("max_dual_simplex_cleanup_level", OptValue::Int(0));
         }
         let lp_iters_start = lp.num_lp_iterations();
         let gd = w.globaldom();
