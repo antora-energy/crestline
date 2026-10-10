@@ -32,7 +32,7 @@ on:
         description: "Pairs at once on a runner, of 4 vCPUs (1)"
 
 env:
-  CONFIGS: "${{ inputs.configs || 'base: ; nopert: mip_graph_lns_cost_perturbation=false' }}"
+  CONFIGS: "${{ inputs.configs || 'main@main: ; head:' }}"
   INSTANCES: "${{ inputs.instances || '*.mps.gz' }}"
   SEEDS: "${{ inputs.seeds || '0-15' }}"
   TIME_LIMIT: "${{ inputs.time_limit || '180' }}"
