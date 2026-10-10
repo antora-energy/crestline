@@ -111,7 +111,11 @@ iteration counts unchanged):
   and costs checked by hash): 4.9% fewer instructions over 600 re-solves
   of a dispatch tick after single fixings;
 - after an infeasible LNS LP, the previous simplex iterate (factor and edge
-  weights) is restored rather than refactorized.
+  weights) is restored rather than refactorized;
+- the scaled matrix is kept between solves while the matrix and scale
+  factors are unchanged, the factor's solve error is not recomputed for
+  an unchanged factor, and passes whose results only feed the log are
+  skipped without output (see [performance.md](./performance.md)).
 
 Cut separation also skips an aggregation whose transformation has no
 integer column at a fractional value, which cannot give a violated cut
@@ -125,6 +129,7 @@ integer column at a fractional value, which cannot give a violated cut
 | `mip_concurrent_helper` | true |
 | `mip_concurrent_crossover` | false |
 | `mip_root_lp_devex` | false (see [performance.md](./performance.md)) |
+| `mip_graph_lns_cost_perturbation` | true (see [performance.md](./performance.md)) |
 | `simplex_dse_exact_init_max_rows` | no limit (20000 in the MIP's LP relaxation) |
 | `simplex_keep_random_vectors` | false (true in the MIP's LP relaxation) |
 | `full_lp_kkt_check` | true (false in the MIP's LP relaxation) |
