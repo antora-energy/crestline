@@ -130,6 +130,8 @@ integer column at a fractional value, which cannot give a violated cut
 | `mip_concurrent_crossover` | false |
 | `mip_root_lp_devex` | false (see [performance.md](./performance.md)) |
 | `mip_graph_lns_cost_perturbation` | true (see [performance.md](./performance.md)) |
+| `mip_root_lp_ipx` | false (see [performance.md](./performance.md)) |
+| `mip_root_lp_effort_from_basis` | false (see [performance.md](./performance.md)) |
 | `simplex_dse_exact_init_max_rows` | no limit (20000 in the MIP's LP relaxation) |
 | `simplex_keep_random_vectors` | false (true in the MIP's LP relaxation) |
 | `full_lp_kkt_check` | true (false in the MIP's LP relaxation) |
