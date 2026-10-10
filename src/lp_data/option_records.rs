@@ -865,7 +865,7 @@ pub const RECORDS: &[Meta] = &[
         advanced: false,
         name: "mip_graph_lns_cost_perturbation",
         description: "Whether the dual simplex perturbs costs in the LP solves of graph LNS (as in the MIP's other LP solves)",
-        bool_default: true,
+        bool_default: false,
         int: (0, 0, 0),
         dbl: (0.0, 0.0, 0.0),
         str_default: "",

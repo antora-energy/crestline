@@ -67,9 +67,7 @@ const SOLUTION_STATUS_FEASIBLE: i32 = 2;
 /// HighsTimer::initial_clock_start
 const INITIAL_CLOCK_START: f64 = 1.0;
 
-fn wall_time() -> f64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
-}
+use crate::util::clock::now as wall_time;
 
 /// HighsTimer's four clocks of a run: 0 run, 1 solve, 2 presolve, 3
 /// postsolve

@@ -1,0 +1,151 @@
+# Paired A/B benchmark on the dispatch MILPs (private repo
+# asross/crestline-dispatch, read by a deploy key). Run by hand
+# (workflow_dispatch, inputs below), or by pushing a branch bench-dispatch/*
+# whose commit sets the defaults in `env`. Seeds x instances are sharded over
+# runners; on each runner every (instance, seed) runs all configs back to
+# back, so a pair sees the same CPU. Results: the dispatch-results artifact
+# (JSONL) and the run summary (bench/dispatch.py report). Logs are public:
+# only names, objectives, gaps and times print.
+name: bench-dispatch
+on:
+  push:
+    branches: ['bench-dispatch/**']
+  workflow_dispatch:
+    inputs:
+      configs:
+        description: "Configs, ';'-separated: NAME[@GIT_REF]: option=value ... (the first is the base)"
+      instances:
+        description: "Instance globs under instances/, space-separated (all)"
+      seeds:
+        description: "Seeds (0-15)"
+      time_limit:
+        description: "Time limit, s (180)"
+      threads:
+        description: "Threads (1)"
+      mip_rel_gap:
+        description: "mip_rel_gap (0.01)"
+      archs:
+        description: "x64, arm64 or both, comma-separated (x64,arm64)"
+      shards:
+        description: "Runners per architecture (16)"
+      parallel:
+        description: "Pairs at once on a runner, of 4 vCPUs (1)"
+
+env:
+  CONFIGS: "${{ inputs.configs || 'main@main: ; head:' }}"
+  INSTANCES: "${{ inputs.instances || '*.mps.gz' }}"
+  SEEDS: "${{ inputs.seeds || '0-15' }}"
+  TIME_LIMIT: "${{ inputs.time_limit || '180' }}"
+  THREADS: "${{ inputs.threads || '1' }}"
+  GAP: "${{ inputs.mip_rel_gap || '0.01' }}"
+  ARCHS: "${{ inputs.archs || 'x64,arm64' }}"
+  SHARDS: "${{ inputs.shards || '16' }}"
+  PARALLEL: "${{ inputs.parallel || '1' }}"
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      builds: ${{ steps.p.outputs.builds }}
+      runs: ${{ steps.p.outputs.runs }}
+      cfgs: ${{ steps.p.outputs.cfgs }}
+      base: ${{ steps.p.outputs.base }}
+    steps:
+      - id: p
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          runner = {'x64': 'ubuntu-24.04', 'arm64': 'ubuntu-24.04-arm'}
+          archs = [a.strip() for a in os.environ['ARCHS'].split(',') if a.strip()]
+          refs, cfgs = {}, []
+          for c in os.environ['CONFIGS'].split(';'):
+              if not c.strip():
+                  continue
+              head, _, opts = c.partition(':')
+              nm, _, ref = head.strip().partition('@')
+              slug = re.sub(r'[^A-Za-z0-9._-]', '_', ref) if ref else 'head'
+              refs[slug] = ref
+              cfgs.append(','.join([f'{nm}=bins/{slug}/crest'] + opts.split()))
+          print('builds=' + json.dumps([dict(arch=a, runner=runner[a], ref=r, slug=s) for a in archs for s, r in refs.items()]))
+          print('runs=' + json.dumps([dict(arch=a, runner=runner[a], shard=k) for a in archs for k in range(int(os.environ['SHARDS']))]))
+          print('cfgs=' + ' '.join(cfgs))
+          print('base=' + cfgs[0].split('=')[0])
+          EOF
+          cat "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    strategy:
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.builds) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ matrix.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      # x64: x86-64-v3 as on AWS Lambda (README); arm64: the default target
+      - run: |
+          if [ "${{ matrix.arch }}" = x64 ]; then
+            export RUSTFLAGS="-C llvm-args=-unroll-runtime=false -C target-cpu=x86-64-v3"
+          fi
+          cargo build --release --bin crest
+          mkdir -p out/${{ matrix.slug }} && cp target/release/crest out/${{ matrix.slug }}/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crest-${{ matrix.arch }}-${{ matrix.slug }}
+          path: out
+
+  run:
+    needs: [plan, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.runs) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: asross/crestline-dispatch
+          ssh-key: ${{ secrets.DISPATCH_DEPLOY_KEY }}
+          path: dispatch
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: crest-${{ matrix.arch }}-*
+          path: bins
+          merge-multiple: true
+      - env:
+          CFGS: ${{ needs.plan.outputs.cfgs }}
+          SHARD: ${{ matrix.shard }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          chmod +x bins/*/crest
+          inst=(); for g in $INSTANCES; do inst+=("dispatch/instances/$g"); done
+          python3 bench/dispatch.py run results-$ARCH-$SHARD.jsonl \
+            --cfg $CFGS --inst "${inst[@]}" --seeds "$SEEDS" --tl "$TIME_LIMIT" \
+            --threads "$THREADS" --gap "$GAP" --shard "$SHARD/$SHARDS" -j "$PARALLEL"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ matrix.arch }}-${{ matrix.shard }}
+          path: results-*.jsonl
+
+  report:
+    needs: [plan, run]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: res
+          merge-multiple: true
+      - run: |
+          cat res/*.jsonl > dispatch-results.jsonl
+          python3 bench/dispatch.py report dispatch-results.jsonl --base ${{ needs.plan.outputs.base }} | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dispatch-results
+          path: dispatch-results.jsonl

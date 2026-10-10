@@ -10,7 +10,6 @@
 use crate::util::fma::ClangFma;
 
 use crate::hvector::{HVec, OwnedHVec, K_HIGHS_TINY, K_HIGHS_ZERO};
-use std::time::Instant;
 
 pub const UPDATE_FT: i32 = 1;
 pub const UPDATE_PF: i32 = 2;
@@ -607,7 +606,7 @@ impl HFactor {
     ) -> i32 {
         // Set up a timer to prevent build running longer than time_limit,
         // which is only finite in HPresolve::removeDependentEquations
-        let build_timer = Instant::now();
+        let build_timer = crate::util::clock::now();
         self.pivot_threshold = pivot_threshold;
         self.pivot_tolerance = pivot_tolerance;
         self.time_limit = time_limit;
@@ -912,7 +911,7 @@ impl HFactor {
         self.kernel_dim = self.nwork;
     }
 
-    fn build_kernel(&mut self, basic_index: &[i32], build_timer: Instant) -> i32 {
+    fn build_kernel(&mut self, basic_index: &[i32], build_timer: f64) -> i32 {
         // Deal with the kernel part by 'n-work' pivoting
         let mut fake_search = 0.0;
         let mut fake_fill = 0.0;
@@ -936,7 +935,7 @@ impl HFactor {
             }
             // Determine whether to return due to exceeding the time limit
             if check_for_timeout && search_k % timer_frequency == 0 {
-                let current_time = build_timer.elapsed().as_secs_f64();
+                let current_time = crate::util::clock::now() - build_timer;
                 let time_difference = current_time - previous_iteration_time;
                 previous_iteration_time = current_time;
                 let iteration_time = time_difference / timer_frequency as f64;
