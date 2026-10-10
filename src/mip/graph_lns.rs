@@ -649,6 +649,9 @@ impl Heur {
         // domain
         let lp = Lp::copy(w.d.lp, w);
         lp.set_adjust_symmetric_branching_col(false);
+        if !m.opts.graph_lns_cost_perturbation {
+            lp.set_option(4);
+        }
         let lp_iters_start = lp.num_lp_iterations();
         let gd = w.globaldom();
         let decisioncols = self.decisioncols.clone();

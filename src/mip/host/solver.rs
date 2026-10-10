@@ -412,6 +412,7 @@ impl MipSolver {
                 mip_detect_symmetry: o.mip_detect_symmetry,
                 mip_improving_solution_save: o.mip_improving_solution_save,
                 mip_concurrent_crossover: o.mip_concurrent_crossover,
+                graph_lns_cost_perturbation: o.mip_graph_lns_cost_perturbation,
             },
             helper_pool: self.concurrent_lns,
             lns_target: self.lns_target_reached,
