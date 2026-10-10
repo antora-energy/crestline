@@ -509,6 +509,14 @@ perf.py, GitHub): x86_64 all 0.966 (MIP 0.950, LP 1.00, IPX 0.858), arm64
 0.956 (MIP 0.936, LP 0.99, IPX 0.840); the LP cases are even, the MIP
 and IPX gains are path differences as much as arithmetic.
 
+**Dispatch suite, paired on GitHub runners** (`bench-dispatch.yml`,
+main against this branch, 25 models x 16 seeds, 1 thread, 180 s, run
+38082983814): arm64 (same paths) time 0.984 over the 24 instances solved
+by both, every gap the same, primal integral slightly lower everywhere;
+x86_64 (x86-64-v3, other paths through FMA) time 0.967, solved 371 -> 370
+runs (`diverse_10-01` 3 -> 2 of 16 within the limit), end gaps within
+noise (hard_10-03 +0.016 ± 0.078%, primal integral -0.196 ± 0.141%).
+
 ### Numerics: tried and rejected
 
 - Global contraction (`-C llvm-args=-fp-contract=fast`, which rustc
