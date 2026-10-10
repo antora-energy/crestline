@@ -1036,9 +1036,7 @@ fn start_symmetry_detection(ms: &mut MipSolver) {
     }
 }
 
-fn wall_time() -> f64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
-}
+use crate::util::clock::now as wall_time;
 
 /// startAnalyticCenterComputation: the IPM solve of the analytic centre
 fn start_analytic_center(ms: &mut MipSolver) {

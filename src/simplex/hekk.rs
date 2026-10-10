@@ -1472,7 +1472,7 @@ pub fn tableau_row_price_quad(e: &mut EkkView, row_ep: &HVec, row_ap: &mut HVec)
 /// HEkk::bailout, with a run clock read from C++ once and then advanced
 /// by a Rust monotonic clock
 pub struct Bailout {
-    clock: Option<(f64, std::time::Instant)>,
+    clock: Option<(f64, f64)>,
 }
 
 impl Bailout {
@@ -1482,10 +1482,10 @@ impl Bailout {
 
     fn timer_read(&mut self, x: &CHekk) -> f64 {
         match self.clock {
-            Some((time0, instant0)) => time0 + instant0.elapsed().as_secs_f64(),
+            Some((time0, clock0)) => time0 + crate::util::clock::now() - clock0,
             None => {
                 let time0 = (x.host.timer_read)(x.host.ctx);
-                self.clock = Some((time0, std::time::Instant::now()));
+                self.clock = Some((time0, crate::util::clock::now()));
                 time0
             }
         }
