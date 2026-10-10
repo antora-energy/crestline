@@ -87,6 +87,12 @@ Checks cost: run the cheap ones per change, the expensive ones per batch.
   vol1 is Infeasible. With dualize on, presolve on or off, every check
   instance has the default run's model status, and no panics.
 
+- **Graph LNS cost perturbation (`mip_graph_lns_cost_perturbation`,
+  off by default):** the C++ perturbs costs in graph LNS's LP solves.
+  Crestline does not by default (faster on the dispatch models, see
+  performance.md); `bench/quick_check.sh` and `bench/perf.py` set it to
+  true for crest, so the oracle compares the same paths.
+
 ## Rules for each step
 
 - **Same paths.** Ported code does the same floating-point operations in the

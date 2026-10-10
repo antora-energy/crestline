@@ -239,26 +239,15 @@ Tried and rejected:
   infeasible LNS LP: only 186 restores, no measurable change.
 - KKT check after a MIP LP by selects: within noise (-0.3% of samples).
 
-### `mip_graph_lns_cost_perturbation` (on by default)
+### `mip_graph_lns_cost_perturbation`
 
 Off, graph LNS's LP solves run the dual simplex without cost
-perturbation: no perturbed dual values to compute and no cleanup
-recomputation (the paths change). Evidence (16 seeds, one thread,
-`mip_rel_gap = 0.01`, 180 s wall clock on a heavily oversubscribed shared
-machine, so the time-limited results are noisy; instructions for runs both
-solved):
-
-| Instances | Effect of off |
-|---|---|
-| 23 dispatch models, runs both solve | 0.888 of the instructions (geometric mean of per-instance geometric means; ramp models 0.68-0.88, worst small_windlull 1.05, 3c1b60d6 0.93 on 8 seeds) |
-| runs solved within the limit | 356 of 400 against 354 |
-| `hard_10-03_1340`, `diverse_10-01_0052` (time limit) | mean gap 1.695% -> 1.745% and 1.381% -> 1.481% (paired difference +0.05 +- 0.09 and +0.10 +- 0.15) |
-
-The solves that finish get clearly cheaper, but as for
-`mip_root_lp_devex` the time-limited ticks, where the 180 s incumbent
-counts, are not better (worse on average, within the noise), so the
-option stays on. Graph LNS runs only for `mip_rel_gap >= 1e-3`: MIPLIB at
-the default gap is unaffected.
+perturbation. First measured on a heavily oversubscribed machine with
+wall-clock limits (16 seeds): 0.888 of the instructions on the solved
+dispatch runs, but the time-limited ticks looked worse (mean gap at 180 s
+1.695% -> 1.745% on `hard_10-03_1340`, 1.381% -> 1.481% on
+`diverse_10-01_0052`), so it first stayed on. Measured again without the
+load below: it is now off by default.
 
 ### `mip_root_lp_ipx` and `mip_root_lp_effort_from_basis` (off by default; 2026-10-10)
 
@@ -359,6 +348,112 @@ So both options stay off: IPX for the root LP wins only on the ramp and
 lambda models, and loses more on the rest. The effort-from-basis budget
 is the right one to pair with any future non-simplex root (or the race),
 and is neutral otherwise.
+
+## Graph LNS cost perturbation: off by default (2026-10-10, evening)
+
+### Method: paired runs without machine load
+
+- **Runners:** `.github/workflows/bench-dispatch.yml` (run by hand, or by
+  pushing a branch `bench-dispatch/*` whose commit sets the defaults)
+  runs `bench/dispatch.py` on GitHub's x86_64 (`ubuntu-24.04`, crest
+  built for x86-64-v3; AMD EPYC 7763/9V45/9V74, Xeon 8573C) and arm64
+  (`ubuntu-24.04-arm`, Neoverse N2) runners, one solve at a time per
+  4-vCPU runner, seeds x instances sharded over 16 runners per
+  architecture. Every (instance, seed) runs all configs back to back on the
+  same runner, so the pairs share a CPU model. The instances come from the
+  private repo asross/crestline-dispatch (deploy key); the public logs
+  print only names, objectives, gaps and times.
+- **Locally:** `CRESTLINE_INSTR_CLOCK=R` (macOS) makes the run timers count
+  R * 1e9 retired instructions as a second (`proc_pid_rusage`), so a
+  one-thread run stops at the same point however loaded the machine is
+  (two runs of `hard_10-03_1340` to a 20 s limit gave the same log line for
+  line). R = 5 here: 900G instructions for a 180 s limit.
+  Chosen over process CPU time, which still varies with cache and
+  memory contention and with P/E core placement, and over a work-unit
+  counter, which would need effort estimates everywhere time is read.
+- **Measures** (`bench/dispatch.py report`): per instance, differences
+  B - A paired by seed with 95% t-intervals; time as the geometric mean
+  of B/A over runs that both solve (interval in log space); gap at the
+  limit; and the mean primal gap over the limit (Berthold's primal
+  integral divided by the limit: the incumbent's gap to the best
+  objective any run found, 100% before the first incumbent), which credits
+  finding good solutions sooner.
+
+### Results (one thread, `mip_rel_gap = 0.01`, 180 s)
+
+Off against on, paired by seed: 16 seeds, the hard ticks 32 on the
+runners (16 on the M1).
+
+| | x86_64 runners | arm64 runners | M1, instruction clock |
+|---|---|---|---|
+| solved dispatch models (23), time, geometric mean of per-instance ratios | 0.920 | 0.896 | 0.888 (instructions, earlier 16-seed run) |
+| instances whose interval lies below 1 / above 1 | 7 / 0 | 6 / 0 | |
+| largest point estimate | small_pert_s1_noramp 1.046 [0.83, 1.32] | small_windlull 1.043 [0.93, 1.17] | |
+| runs solved in 180 s (of 400) | 372 -> 371 | 369 -> 371 | |
+| `hard_10-03_1340`: gap at 180 s (on: 1.47%, 1.54%, 1.60%) | -0.051 +- 0.046 | -0.072 +- 0.108 | +0.005 +- 0.105 |
+| `hard_10-03_1340`: mean primal gap (%) | -0.146 +- 0.103 | -0.344 +- 0.437 | -0.375 +- 0.189 |
+| `diverse_10-01_0052`: gap at 180 s (on: 1.16%, 1.15%, 1.22%) | -0.014 +- 0.042 | +0.010 +- 0.039 | -0.013 +- 0.058 |
+| `diverse_10-01_0052`: mean primal gap (%) | -0.010 +- 0.083 | -0.030 +- 0.050 | -0.123 +- 0.120 |
+
+The ramp models gain most (`dm_full_randsoc_ramp` 0.747 and 0.691,
+`dm_medium_pert_s1_ramp` 0.761 and 0.670, `dm_full_pert_s2_ramp` 0.837
+and 0.805), and their mean primal gap drops by 0.8-2.7 points (the
+incumbent comes earlier).
+
+Two threads (16 seeds, `hard_10-03` and `diverse_10-01`): gap at 180 s
++0.016 +- 0.040 and -0.047 +- 0.052 (x86_64), -0.021 +- 0.036 and
++0.012 +- 0.023 (arm64); mean primal gap on `hard_10-03` -0.117 +- 0.180
+and -0.248 +- 0.120; `diverse_10-01` solved in 7 -> 13 and 13 -> 11 of 16
+runs. The 23 solved models on two threads (16 seeds, every run solves):
+0.921 (x86_64) and 0.932 (arm64), 7 and 8 intervals below 1; one above,
+`dm_small_randsoc_noramp` 1.053 [1.023, 1.084] on x86_64 (a 0.35 s
+solve; 0.967 on arm64; one in 92 intervals at 95% is what chance gives);
+`dm_full_randsoc_ramp` 0.559 and 0.563.
+
+So the earlier "worse at the time limit" was the machine's load: without
+it the hard ticks are even or slightly better, and no solved model
+regresses.
+
+### Why (instrumented, M1, instruction clock, 4 seeds)
+
+Per graph LNS LP solve, on against off:
+
+| Model | dual simplex iterations | solves with a primal simplex clean-up | clean-up iterations per solve | iterations with a zero dual step |
+|---|---|---|---|---|
+| `dm_full_pert_s1_ramp` | 78.8 -> 56.4 | 35% -> 0 | 19.4 -> 0 | 20% -> 50% |
+| `dm_medium_pert_s1_ramp` | 40.0 -> 27.3 | 29% -> 9% (cost shifting) | 8.0 -> 0.4 | 13% -> 34% |
+| 3c1b60d6, small_windlull | 22.5 -> 21.9, 6.0 -> 4.7 | 0 | 0 | 0 |
+| `hard_10-03_1340` | 5.3 -> 6.0 | 0 | 0 | 0 |
+| `diverse_10-01_0052` | 9.9 -> 10.0 | 0 | 0 | 0 |
+
+- **The saving** is on the ramp models: removing the perturbation at the
+  end leaves dual infeasibilities in a third of the LNS LPs, which the
+  primal simplex then cleans up (a quarter of graph LNS's iterations), and
+  the perturbed solves themselves take more dual iterations. Without
+  perturbation half the iterations are dual degenerate, but there are
+  fewer of them.
+- **The hard ticks:** (a) no degenerate stalls: zero-step iterations stay
+  under 1%, and the longest LNS LP is about as long either way (1946 and
+  1991 iterations). (b) no loss of diversity: neighbourhoods improving the
+  incumbent 11/31 -> 15/39 per run on `hard_10-03`, 14/50 -> 14/44 on
+  `diverse_10-01`; graph LNS incumbents 45.5 -> 46.0 and 70.5 -> 57.8
+  (the final gaps even). The LPs cost the same, the paths diverge: (c)
+  noise, which the earlier wall-clock measurement on a loaded machine
+  mistook for a loss.
+
+Tried (as options, runners, 16 seeds) and rejected:
+- A smaller perturbation (multiplier 0.05 in graph LNS): 0.976 (x86_64)
+  and 0.948 (arm64), with `dm_medium_prices_noramp` 1.119 [1.034, 1.212]
+  on x86_64: less than off and one regression.
+- Keeping the perturbation but no primal clean-up
+  (`max_dual_simplex_cleanup_level = 0` in graph LNS): the solve's
+  unscaled refinement then re-solves the LP to remove the remaining dual
+  infeasibilities, so the work is not saved.
+- Perturbing only after a stall: no stalls to react to (above).
+
+The C++ HiGHS perturbs these LPs: `bench/quick_check.sh` and
+`bench/perf.py` run crest with `mip_graph_lns_cost_perturbation = true`
+against the C++ app.
 
 ## Other platforms
 
