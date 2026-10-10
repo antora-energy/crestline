@@ -589,6 +589,7 @@ options! {
     mip_concurrent_helper: bool = true;
     mip_concurrent_crossover: bool = false;
     mip_root_lp_devex: bool = false;
+    mip_graph_lns_cost_perturbation: bool = true;
     mip_heuristic_run_root_reduced_cost: bool = true;
     mip_heuristic_run_zi_round: bool = false;
     mip_heuristic_run_shifting: bool = false;
@@ -757,7 +758,7 @@ mod tests {
     #[test]
     fn names_set_and_get() {
         let mut o = Opts::default();
-        assert_eq!(NAMES.len(), 162);
+        assert_eq!(NAMES.len(), 163);
         assert!(o.set("presolve", OptValue::Str(b"off")));
         assert_eq!(o.presolve, b"off");
         assert!(o.set("time_limit", OptValue::Int(3)));

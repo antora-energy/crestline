@@ -122,6 +122,121 @@ impl Default for LpCore {
 pub struct Lp {
     pub g: LpCore,
     pub model_name: Vec<u8>,
+    /// The scaled matrix of the last solve, for the next one
+    pub scaled: ScaledMatrix,
+}
+
+/// The engine LP is scaled for every solve and unscaled after it, while
+/// the matrix of the MIP's LP relaxation rarely changes between solves: the
+/// scaled matrix is kept with the matrix and scale factors it came from,
+/// and swapped in while they are unchanged. The scale factors are powers
+/// of two, so unscaling gives the matrix back exactly; `exact` records
+/// that the round trip was checked.
+#[derive(Clone, Debug, Default)]
+pub struct ScaledMatrix {
+    src: SparseMatrix,
+    col: Vec<f64>,
+    row: Vec<f64>,
+    scaled: SparseMatrix,
+    /// The matrix and the scale factors for which `scaled` holds
+    valid: bool,
+    /// `scaled` is in the LP and the LP's matrix in `scaled`
+    swapped: bool,
+    /// `scaled` was filled by the last applyScale: check the unscaling
+    check: bool,
+}
+
+/// The equality of the bits of two slices
+fn same_bits<T: Copy>(a: &[T], b: &[T]) -> bool {
+    // SAFETY: plain data (i32, f64) seen as bytes
+    let bytes = |s: &[T]| unsafe { std::slice::from_raw_parts(s.as_ptr() as *const u8, std::mem::size_of_val(s)) };
+    bytes(a) == bytes(b)
+}
+
+fn same_matrix(a: &SparseMatrix, b: &SparseMatrix) -> bool {
+    a.format == b.format
+        && a.num_col == b.num_col
+        && a.num_row == b.num_row
+        && same_bits(&a.start, &b.start)
+        && same_bits(&a.p_end, &b.p_end)
+        && same_bits(&a.index, &b.index)
+        && same_bits(&a.value, &b.value)
+}
+
+impl PartialEq for ScaledMatrix {
+    /// A cache: not part of the LP's value
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl ScaledMatrix {
+    /// Forget the scaled matrix (when the engine LP changes otherwise
+    /// than by bounds and costs while scaled: dualization)
+    pub fn reset(&mut self) {
+        self.valid = false;
+        self.swapped = false;
+        self.check = false;
+    }
+}
+
+impl Lp {
+    /// HighsLp::applyScale, with the scaled matrix of the last solve when
+    /// it was scaled from the same matrix by the same factors
+    pub fn apply_scale(&mut self) {
+        let c = &mut self.scaled;
+        let to_scale = !self.g.is_scaled && self.g.scale.has_scaling;
+        if c.swapped {
+            c.reset();
+        }
+        let reuse = to_scale
+            && c.valid
+            && same_bits(&c.col, &self.g.scale.col)
+            && same_bits(&c.row, &self.g.scale.row)
+            && same_matrix(&c.src, &self.g.a);
+        let fill = to_scale && !reuse;
+        if fill {
+            c.src.clone_from(&self.g.a);
+            c.col.clone_from(&self.g.scale.col);
+            c.row.clone_from(&self.g.scale.row);
+        }
+        let mut v = self.view();
+        super::lp_utils::apply_scale_with(&mut v, !reuse);
+        self.take_scalars(&v);
+        let c = &mut self.scaled;
+        if reuse {
+            std::mem::swap(&mut self.g.a, &mut c.scaled);
+            c.swapped = true;
+        } else if fill {
+            c.scaled.clone_from(&self.g.a);
+            c.valid = true;
+            c.check = true;
+        }
+    }
+
+    /// HighsLp::unapplyScale (the matrix swapped back if it was swapped in)
+    pub fn unapply_scale(&mut self) {
+        let swap = self.g.is_scaled && self.scaled.swapped;
+        let mut v = self.view();
+        super::lp_utils::unapply_scale_with(&mut v, !swap);
+        self.take_scalars(&v);
+        let c = &mut self.scaled;
+        if swap {
+            std::mem::swap(&mut self.g.a, &mut c.scaled);
+            c.swapped = false;
+        } else if c.check {
+            // Keep the scaled matrix only if unscaling it gave the matrix
+            // back bit for bit
+            c.check = false;
+            c.valid = same_matrix(&c.src, &self.g.a);
+        }
+    }
+
+    /// HighsLp::clearScaling
+    pub fn clear_scaling(&mut self) {
+        self.unapply_scale();
+        self.clear_scale();
+    }
 }
 
 impl std::ops::Deref for Lp {
@@ -402,6 +517,7 @@ mod tests {
                 ..Default::default()
             },
             model_name: b"m".to_vec(),
+            ..Default::default()
         };
         let v = src.view();
         let mut dst = Lp::default();
@@ -409,5 +525,51 @@ mod tests {
         unsafe { dst.import(&v, b"m") };
         assert_eq!(dst, src);
         assert_eq!(dst.a.num_nz(), 2);
+    }
+
+    /// The kept scaled matrix gives the bits of scaling afresh, and is
+    /// not used once the matrix changes
+    #[test]
+    fn scaled_matrix_reuse() {
+        let mut lp = Lp::default();
+        lp.g.num_col = 2;
+        lp.g.num_row = 2;
+        lp.g.col_cost = vec![1.0, 2.0];
+        lp.g.col_lower = vec![0.0, 0.0];
+        lp.g.col_upper = vec![1.0, 1.0];
+        lp.g.row_lower = vec![0.0, 0.0];
+        lp.g.row_upper = vec![1.0, 1.0];
+        lp.g.a = Mat {
+            format: matrix_format::COLWISE,
+            num_col: 2,
+            num_row: 2,
+            start: vec![0, 2, 3],
+            p_end: vec![],
+            index: vec![0, 1, 1],
+            value: vec![3.0, 0.1, 7.0],
+        };
+        lp.g.scale = ScaleG { strategy: 1, has_scaling: true, num_col: 2, num_row: 2, cost: 1.0, col: vec![0.5, 4.0], row: vec![2.0, 0.25] };
+        let fresh = |lp: &Lp| {
+            let mut l = lp.g.clone();
+            let mut v = l.view();
+            super::super::lp_utils::apply_scale(&mut v);
+            l.a.value
+        };
+        let unscaled = lp.g.a.clone();
+        for round in 0..4 {
+            if round == 2 {
+                lp.g.a.value[1] = 0.3;
+            }
+            let expect = fresh(&lp);
+            let before = lp.g.a.clone();
+            lp.apply_scale();
+            assert!(lp.g.is_scaled);
+            assert_eq!(lp.g.a.value, expect);
+            lp.unapply_scale();
+            assert!(!lp.g.is_scaled);
+            assert_eq!(lp.g.a, before);
+            assert_eq!(lp.scaled.swapped, false);
+        }
+        assert_ne!(lp.g.a, unscaled);
     }
 }

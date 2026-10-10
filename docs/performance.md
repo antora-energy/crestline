@@ -200,6 +200,65 @@ The suite of solved dispatch models gets clearly faster, but the
 time-limited ticks, where the incumbent at 180 s matters, do not, and one
 MIPLIB instance lost its incumbent: so the option stays off.
 
+## Graph LNS LP re-solves: pass of 2026-10-10 (later)
+
+Profile (macOS `sample`, `hard_10-03_1340` to the end of its root, single
+thread, `mip_rel_gap = 0.01`): graph LNS solves 6951 LPs of about 8.5
+dual simplex iterations each. Per solve, on average, the dual values were
+computed 2.75 times, the primal values 1.86 times, the factor's solve
+error 2.7 times, the primal and dual infeasibility sums 3.7 and 4.7 times
+and the costs set up 3.5 times; the matrix was scaled and unscaled once.
+Only 66 of the 12366 rebuilds refactorized.
+
+Landed (same paths: quick_check, the 100-node MIP log comparison, every
+perf.py case):
+
+| Change | Effect |
+|---|---|
+| The scaled matrix of the last solve is kept and swapped in while the matrix (compared bit for bit) and the scale factors are unchanged; the scale factors are powers of two, and the unscaled round trip is checked once | matrix (un)scaling 3.7% -> 0 (a 1% compare remains) |
+| The factor's solve error is not recomputed when nothing it depends on has changed (the finished check right after the rebuild that ends a solve) | 18695 -> 12305 solve-error checks |
+| The rebuild's infeasibility sums, read only by the log, are skipped without output | 25843 -> 13477 primal, 32535 -> 20170 dual infeasibility passes |
+| No second unperturbed cost set-up after initialiseForSolve's; no recomputation of the dual values when no cost perturbation was made (solve start, cleanup) | 24453 -> 17927 cost set-ups |
+| Cost and bound set-up, `HVec::tight` and computeDual's sums over slices (vectorized) | |
+| Fix: the run that reads a model passed the Highs object to a clock callback that takes the engine (undefined behaviour, exposed by a layout change) | |
+
+Instructions retired, deterministic (crest after / before, the cases of
+the earlier pass): `hard_10-03` root 0.902, `diverse_10-01` root 0.903,
+3c1b60d6 0.971, 080458 0.997, `pert_s1_ramp` 0.989, `randsoc_ramp` 0.989,
+`medium_pert_s1_ramp` 0.974, `full_prices_noramp` 0.914; geometric mean
+0.954. Cycles (minimum of 3 alternating runs, on a heavily shared machine,
+so indicative): 0.959, 0.893, 0.964, 0.997, 0.946, 0.949, 0.977, 0.912;
+geometric mean 0.949. Profile shares on the hard tick's root, before ->
+after: graph LNS 86% -> 83%, rebuild 17.9% -> 16.8%, cleanup 4.3% ->
+4.2%, scaling 3.7% -> 1.8% (mostly the compare), solve-error checks 6.0%
+-> 4.8%, the dual iterations themselves 16% -> 21%.
+
+Tried and rejected:
+- Keeping the recorded dual values across an iterate restored after an
+  infeasible LNS LP: only 186 restores, no measurable change.
+- KKT check after a MIP LP by selects: within noise (-0.3% of samples).
+
+### `mip_graph_lns_cost_perturbation` (on by default)
+
+Off, graph LNS's LP solves run the dual simplex without cost
+perturbation: no perturbed dual values to compute and no cleanup
+recomputation (the paths change). Evidence (16 seeds, one thread,
+`mip_rel_gap = 0.01`, 180 s wall clock on a heavily oversubscribed shared
+machine, so the time-limited results are noisy; instructions for runs both
+solved):
+
+| Instances | Effect of off |
+|---|---|
+| 23 dispatch models, runs both solve | 0.888 of the instructions (geometric mean of per-instance geometric means; ramp models 0.68-0.88, worst small_windlull 1.05, 3c1b60d6 0.93 on 8 seeds) |
+| runs solved within the limit | 356 of 400 against 354 |
+| `hard_10-03_1340`, `diverse_10-01_0052` (time limit) | mean gap 1.695% -> 1.745% and 1.381% -> 1.481% (paired difference +0.05 +- 0.09 and +0.10 +- 0.15) |
+
+The solves that finish get clearly cheaper, but as for
+`mip_root_lp_devex` the time-limited ticks, where the 180 s incumbent
+counts, are not better (worse on average, within the noise), so the
+option stays on. Graph LNS runs only for `mip_rel_gap >= 1e-3`: MIPLIB at
+the default gap is unaffected.
+
 ## Other platforms
 
 - **gcc / libstdc++.** With the `libstdcxx` and `no_fma` features, Crestline

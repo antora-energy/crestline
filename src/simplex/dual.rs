@@ -262,6 +262,9 @@ pub struct Dual<'a> {
     new_devex_framework: bool,
     /// analysis_.num_correct_dual_primal_flip, for the rebuild
     num_correct_dual_primal_flip: i32,
+    /// The last factor solve error, with the iteration count, update count,
+    /// column density and basis hash it was computed at
+    solve_error: Option<((i32, i32, u64, u64), f64)>,
     /// The latest phase 1 LP dual infeasibilities (HighsSimplexAnalysis)
     lp_dual_infeasibility: Infeasibility,
     /// The analysis data of the last iteration, if not yet in analysis_
@@ -335,6 +338,7 @@ impl<'a> Dual<'a> {
             num_devex_iterations: 0,
             new_devex_framework: false,
             num_correct_dual_primal_flip: 0,
+            solve_error: None,
             lp_dual_infeasibility: Infeasibility::default(),
             analysis_data: AnalysisData::default(),
             analysis_data_pending: false,
@@ -500,9 +504,21 @@ impl<'a> Dual<'a> {
         hekk::reset_synthetic_clock(&mut self.e, self.x);
     }
 
-    /// HEkk::rebuildRefactor
+    /// HEkk::rebuildRefactor. The factor's solve error is a function of
+    /// the factor, the basis and the column density: while none has changed
+    /// since it was last computed (no basis change since a rebuild), it is
+    /// not computed again (the check after the rebuild that ends a solve)
     fn rebuild_refactor(&mut self, rebuild_reason: i32) -> bool {
-        hekk::rebuild_refactor(&mut self.e, self.x, rebuild_reason)
+        let key = (self.x.iteration_count.get(), *self.e.update_count, self.e.col_aq_density.to_bits(), *self.e.basis_hash);
+        let cached = self.solve_error.filter(|_| self.x.has_fresh_rebuild.get()).filter(|c| c.0 == key).map(|c| c.1);
+        let mut computed = None;
+        let refactor = hekk::rebuild_refactor_with(&mut self.e, self.x, rebuild_reason, |e| {
+            *computed.get_or_insert_with(|| cached.unwrap_or_else(|| hekk::factor_solve_error(e)))
+        });
+        if let Some(error) = computed {
+            self.solve_error = Some((key, error));
+        }
+        refactor
     }
 
     /// HEkk::bailout
@@ -519,9 +535,9 @@ impl<'a> Dual<'a> {
             return self.return_from_solve(STATUS_ERROR);
         }
         // Determine the duals without cost perturbation: unless just
-        // computed by initialiseForSolve with these costs
-        self.initialise_cost(false);
+        // computed by initialiseForSolve with these costs (which it set)
         if !x.fresh_unperturbed_dual.get() {
+            self.initialise_cost(false);
             self.compute_dual();
         }
         x.fresh_unperturbed_dual.set(false);
@@ -588,8 +604,11 @@ impl<'a> Dual<'a> {
             }
         }
         if perturb_costs {
-            // Compute the dual values with perturbed costs
-            self.compute_dual();
+            // Compute the dual values with perturbed costs (if no
+            // perturbation was made, those just computed hold)
+            if *self.e.costs_perturbed {
+                self.compute_dual();
+            }
             // Determine the number of dual infeasibilities after fixed
             // variable flips
             self.compute_dual_infeasibilities_with_fixed_variable_flips();
@@ -1202,7 +1221,9 @@ impl<'a> Dual<'a> {
         // Now that there's a new dual_objective_value, reset the updated
         // value
         *self.e.updated_dual_objective_value = *self.e.dual_objective_value;
-        if !x.run_quiet {
+        // The infeasibilities are only reported: without output (the MIP's
+        // LPs) nothing reads them before they are reset below
+        if !x.run_quiet && x.output_flag {
             self.compute_infeasibilities_for_reporting();
             self.report_rebuild(local_rebuild_reason);
         }
@@ -1248,12 +1269,17 @@ impl<'a> Dual<'a> {
             }
         }
         self.dev(msg::CLEANUP_SHIFT, &[], &[]);
+        // Without perturbed or shifted costs, and no basis change since the
+        // rebuild computed the dual values, they hold
+        let duals_hold = !*self.e.costs_perturbed && !*self.e.costs_shifted && x.has_fresh_rebuild.get();
         // Remove perturbation and don't permit further perturbation
         self.initialise_cost(false);
         x.allow_cost_perturbation.set(false);
         self.e.initialise_bound(ALGORITHM_DUAL, self.solve_phase, false);
         // Compute the dual values
-        self.compute_dual();
+        if !duals_hold {
+            self.compute_dual();
+        }
         // Compute the dual infeasibilities
         self.e.compute_simplex_dual_infeasible();
         self.dual_infeas_count = *self.e.num_dual_infeasibilities;

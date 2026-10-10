@@ -863,6 +863,16 @@ pub const RECORDS: &[Meta] = &[
     Meta {
         type_: BOOL,
         advanced: false,
+        name: "mip_graph_lns_cost_perturbation",
+        description: "Whether the dual simplex perturbs costs in the LP solves of graph LNS (as in the MIP's other LP solves)",
+        bool_default: true,
+        int: (0, 0, 0),
+        dbl: (0.0, 0.0, 0.0),
+        str_default: "",
+    },
+    Meta {
+        type_: BOOL,
+        advanced: false,
         name: "mip_heuristic_run_root_reduced_cost",
         description: "Use the rootReducedCost heuristic",
         bool_default: true,

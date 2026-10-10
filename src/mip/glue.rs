@@ -348,6 +348,7 @@ pub struct MipOptions {
     pub mip_detect_symmetry: bool,
     pub mip_improving_solution_save: bool,
     pub mip_concurrent_crossover: bool,
+    pub graph_lns_cost_perturbation: bool,
 }
 
 /// The original model (for solutions in the original space)
@@ -750,7 +751,8 @@ impl Lp {
         self.lph().change_col_costs_mask(mask, cost);
     }
     /// 0 presolve off, 1 presolve on, 2 simplex_strategy primal, 3
-    /// primal_simplex_bound_perturbation_multiplier 0
+    /// primal_simplex_bound_perturbation_multiplier 0, 4
+    /// dual_simplex_cost_perturbation_multiplier 0
     pub fn set_option(&self, which: i32) {
         let h = self.lph();
         match which {
@@ -758,7 +760,8 @@ impl Lp {
             1 => h.set_option("presolve", OptValue::Str(b"on")),
             // kSimplexStrategyPrimal
             2 => h.set_option("simplex_strategy", OptValue::Int(4)),
-            _ => h.set_option("primal_simplex_bound_perturbation_multiplier", OptValue::Double(0.0)),
+            3 => h.set_option("primal_simplex_bound_perturbation_multiplier", OptValue::Double(0.0)),
+            _ => h.set_option("dual_simplex_cost_perturbation_multiplier", OptValue::Double(0.0)),
         };
     }
     /// setBasis(firstrootbasis, origin); `origin` is NUL-terminated

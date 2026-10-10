@@ -850,6 +850,7 @@ impl Highs {
         let mut c = self.e.chighs();
         c.ctx = self as *mut Highs as *mut c_void;
         c.op = file_op;
+        c.clock = file_clock;
         // SAFETY: c's pointers are into the engine, which outlives the run
         let run = unsafe { Run::new(&c) };
         let r = f(&run);
@@ -2498,6 +2499,12 @@ unsafe extern "C" fn file_op(ctx: *mut c_void, which: i32, arg: i64, p: *mut c_v
         Some(r) => r,
         None => super::handle_op(&mut *h.e as *mut LpHandle as *mut c_void, which, arg, p, msg, len),
     }
+}
+
+/// The engine's clock for a run whose context is the Highs object
+unsafe extern "C" fn file_clock(ctx: *mut c_void, which: i32, action: i32) -> f64 {
+    let h = &mut *(ctx as *mut Highs);
+    super::handle_clock(&mut *h.e as *mut LpHandle as *mut c_void, which, action)
 }
 
 unsafe extern "C" fn iis_op(ctx: *mut c_void, which: i32, a: *const Args) -> f64 {

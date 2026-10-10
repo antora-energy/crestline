@@ -68,10 +68,9 @@ impl HVec<'_> {
     /// the index if it is well defined
     pub fn tight(&mut self) {
         if self.count < 0 {
+            // A select rather than a branch per entry: vectorizes
             for v in self.array.iter_mut() {
-                if v.abs() < K_HIGHS_TINY {
-                    *v = 0.0;
-                }
+                *v = if v.abs() < K_HIGHS_TINY { 0.0 } else { *v };
             }
         } else {
             let index = &mut self.index[..self.count as usize];
