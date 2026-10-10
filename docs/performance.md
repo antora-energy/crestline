@@ -536,7 +536,9 @@ and IPX gains are path differences as much as arithmetic.
   Against such a build on the M1 (2026-10-06, heavily loaded machine, one
   rep): all 0.824, MIP 0.868, every case same path.
 - **x86_64.** Fused multiply-adds that clang makes on arm64 are mirrored
-  only on aarch64, so x86_64 builds take the x86_64 C++ paths. Under Rosetta
+  on aarch64 and (since the 2026-10-10 Rust pass) on x86_64 built with
+  FMA (x86-64-v3); the generic x86_64 build and `no_fma` take the x86_64
+  C++ paths. Under Rosetta
   2 (translated code, indicative only): every case same path, all 0.775.
   On native x86_64 (AWS Lambda, gcc builds, a dispatch MILP suite, with the
   port then part Rust and part C++): 0.945
@@ -550,7 +552,9 @@ and IPX gains are path differences as much as arithmetic.
   0.942, IPX 0.942, PDLP 0.676, read 0.330, all 0.776. Built for
   x86-64-v3 (AVX2, as on Lambda) against the generic x86_64 build: MIP
   0.957, LP dual simplex 0.952, LP primal 0.961, IPX 0.975, all 0.965,
-  every case same path (Rust never fuses multiply-adds, so the target
-  changes no result; the CI oracle checks the v3 build too).
+  every case same path (both with `no_fma`; the CI oracle checks the v3
+  build too). The default x86-64-v3 build fuses: see the Rust-specific
+  pass above. On GitHub's arm64 runner (`ubuntu-24.04-arm`), crest
+  against the same gcc C++ build: all 0.775 (MIP 0.805, LP dual 0.760).
 - **CI** checks crest against a gcc build of the C++ app on Linux x86_64
   on every push (see the README).
