@@ -300,10 +300,6 @@ pub struct MipScalars {
     pub lns_tree_next: i64,
     pub lns_tree_wait: i64,
     pub lns_quick_lp_iterations: i64,
-    /// the root LP's effort estimate less the simplex iterations it took
-    /// (mip_root_lp_effort_from_basis), added to total_lp_iterations in the
-    /// graph LNS budgets
-    pub root_lp_credit: i64,
     pub concurrent_lns_seen: i64,
     pub pdi: Pdi,
     pub cliques_extracted: bool,
@@ -315,6 +311,10 @@ pub struct MipScalars {
     pub root_cuts_imported: bool,
     /// the main solver's concurrent helper (concurrent.rs), or null
     pub concurrent_lns: *mut super::concurrent::Main,
+    /// the root LP's effort estimate less the simplex iterations it took
+    /// (mip_root_lp_effort_from_basis), added to total_lp_iterations in the
+    /// graph LNS budgets
+    pub root_lp_credit: i64,
 }
 
 /// The options the solver reads (a copy per call)
@@ -1021,7 +1021,7 @@ mod tests {
     #[test]
     fn layouts() {
         // HighsMipScalars (static_assert in HighsPrimalHeuristics.cpp)
-        assert_eq!(std::mem::size_of::<MipScalars>(), 376);
+        assert_eq!(std::mem::size_of::<MipScalars>(), 384);
         assert_eq!(std::mem::offset_of!(MipScalars, pdi), 320);
         assert_eq!(std::mem::size_of::<HeurStats>(), 72);
         // HighsMipWorker::RsState (static_assert in HighsMipWorker.cpp)
