@@ -384,10 +384,11 @@ impl SepaRound {
     /// HighsLpAggregator::addRow
     pub fn aggr_add_row(&mut self, row: usize, weight: f64) {
         let (s, e) = (self.ar_start[row], self.ar_start[row + 1]);
-        for k in s..e {
-            self.aggr.add(self.ar_index[k], weight * self.ar_value[k]);
+        // add(HighsInt, double) as in the C++ (a CDouble += double)
+        for (&j, &v) in self.ar_index[s..e].iter().zip(&self.ar_value[s..e]) {
+            self.aggr.add_f64(j, weight * v);
         }
-        self.aggr.add((self.num_col + row) as i32, -weight);
+        self.aggr.add_f64((self.num_col + row) as i32, -weight);
     }
 
     /// HighsLpAggregator::getCurrentAggregation
