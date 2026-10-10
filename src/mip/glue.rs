@@ -349,8 +349,6 @@ pub struct MipOptions {
     pub mip_improving_solution_save: bool,
     pub mip_concurrent_crossover: bool,
     pub graph_lns_cost_perturbation: bool,
-    pub graph_lns_cost_perturbation_multiplier: f64,
-    pub graph_lns_primal_cleanup: bool,
 }
 
 /// The original model (for solutions in the original space)
@@ -751,9 +749,6 @@ impl Lp {
     }
     pub fn change_cols_cost(&self, mask: &[i32], cost: &[f64]) {
         self.lph().change_col_costs_mask(mask, cost);
-    }
-    pub fn set_named_option(&self, name: &str, v: OptValue) {
-        self.lph().set_option(name, v);
     }
     /// 0 presolve off, 1 presolve on, 2 simplex_strategy primal, 3
     /// primal_simplex_bound_perturbation_multiplier 0, 4

@@ -413,8 +413,6 @@ impl MipSolver {
                 mip_improving_solution_save: o.mip_improving_solution_save,
                 mip_concurrent_crossover: o.mip_concurrent_crossover,
                 graph_lns_cost_perturbation: o.mip_graph_lns_cost_perturbation,
-                graph_lns_cost_perturbation_multiplier: o.mip_graph_lns_cost_perturbation_multiplier,
-                graph_lns_primal_cleanup: o.mip_graph_lns_primal_cleanup,
             },
             helper_pool: self.concurrent_lns,
             lns_target: self.lns_target_reached,
