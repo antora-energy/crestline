@@ -1342,6 +1342,12 @@ fn matrix_scale(lp: &CLp, apply: bool) {
 
 /// HighsLp::applyScale
 pub fn apply_scale(lp: &mut CLp) {
+    apply_scale_with(lp, true)
+}
+
+/// HighsLp::applyScale, of the matrix too if `matrix` (else the caller
+/// puts the scaled matrix in place)
+pub fn apply_scale_with(lp: &mut CLp, matrix: bool) {
     if lp.is_scaled {
         return;
     }
@@ -1357,13 +1363,20 @@ pub fn apply_scale(lp: &mut CLp) {
             a.row_lower[i] *= a.scale_row[i];
             a.row_upper[i] *= a.scale_row[i];
         }
-        matrix_scale(lp, true);
+        if matrix {
+            matrix_scale(lp, true);
+        }
         lp.is_scaled = true;
     }
 }
 
 /// HighsLp::unapplyScale
 pub fn unapply_scale(lp: &mut CLp) {
+    unapply_scale_with(lp, true)
+}
+
+/// HighsLp::unapplyScale, of the matrix too if `matrix`
+pub fn unapply_scale_with(lp: &mut CLp, matrix: bool) {
     if !lp.is_scaled {
         return;
     }
@@ -1377,7 +1390,9 @@ pub fn unapply_scale(lp: &mut CLp) {
         a.row_lower[i] /= a.scale_row[i];
         a.row_upper[i] /= a.scale_row[i];
     }
-    matrix_scale(lp, false);
+    if matrix {
+        matrix_scale(lp, false);
+    }
     lp.is_scaled = false;
 }
 

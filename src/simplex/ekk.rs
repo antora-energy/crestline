@@ -877,21 +877,30 @@ impl EkkView<'_> {
                 dual_col.array[i_row] = value;
             }
         }
-        // Copy the costs in case the basic costs are all zero
+        // The costs, less the duals' contributions if the basic costs are
+        // not all zero: (cost + shift) - x in one pass
         let num_tot = self.num_tot();
-        for ((d, &c), &s) in self.work_dual[..num_tot].iter_mut().zip(&self.work_cost[..num_tot]).zip(&self.work_shift[..num_tot]) {
-            *d = c + s;
-        }
+        let sum = |d: &mut [f64], c: &[f64], s: &[f64]| {
+            for ((d, &c), &s) in d.iter_mut().zip(c).zip(s) {
+                *d = c + s;
+            }
+        };
+        let sum_less = |d: &mut [f64], c: &[f64], s: &[f64], x: &[f64]| {
+            for (((d, &c), &s), &x) in d.iter_mut().zip(c).zip(s).zip(x) {
+                *d = (c + s) - x;
+            }
+        };
         if dual_col.count != 0 {
             self.full_btran(dual_col);
             self.full_price(dual_col, dual_row);
-            let (col_dual, row_dual) = self.work_dual[..num_tot].split_at_mut(self.num_col);
-            for (d, &x) in col_dual.iter_mut().zip(&dual_row.array[..]) {
-                *d -= x;
-            }
-            for (d, &x) in row_dual.iter_mut().zip(&dual_col.array[..]) {
-                *d -= x;
-            }
+            let n = self.num_col;
+            let (col_dual, row_dual) = self.work_dual[..num_tot].split_at_mut(n);
+            let (cost, shift) = (&self.work_cost[..num_tot], &self.work_shift[..num_tot]);
+            // (dual_row and dual_col have num_col and num_row entries)
+            sum_less(col_dual, &cost[..n], &shift[..n], &dual_row.array[..]);
+            sum_less(row_dual, &cost[n..], &shift[n..], &dual_col.array[..]);
+        } else {
+            sum(&mut self.work_dual[..num_tot], &self.work_cost[..num_tot], &self.work_shift[..num_tot]);
         }
         // Indicate that the dual infeasibility information isn't known
         *self.num_dual_infeasibilities = K_ILLEGAL_INFEASIBILITY_COUNT;
@@ -1238,40 +1247,56 @@ impl EkkView<'_> {
     pub fn initialise_lp_col_cost(&mut self) {
         let cost_scale_factor = 2.0f64.powi(self.cost_scale_factor);
         let sense = self.sense as f64;
-        for i_col in 0..self.num_col {
-            self.work_cost[i_col] = sense * cost_scale_factor * self.col_cost[i_col];
-            self.work_shift[i_col] = 0.0;
+        let n = self.num_col;
+        // (sense * cost_scale_factor) * cost, as the C++ evaluates it
+        let factor = sense * cost_scale_factor;
+        for (w, &c) in self.work_cost[..n].iter_mut().zip(&self.col_cost[..n]) {
+            *w = factor * c;
         }
+        self.work_shift[..n].fill(0.0);
     }
 
     /// HEkk::initialiseLpRowCost
     pub fn initialise_lp_row_cost(&mut self) {
-        for i_var in self.num_col..self.num_tot() {
-            self.work_cost[i_var] = 0.0;
-            self.work_shift[i_var] = 0.0;
-        }
+        let rows = self.num_col..self.num_tot();
+        self.work_cost[rows.clone()].fill(0.0);
+        self.work_shift[rows].fill(0.0);
     }
 
-    fn set_work_bound(&mut self, i_var: usize, lower: f64, upper: f64) {
-        self.work_lower[i_var] = lower;
-        self.work_upper[i_var] = upper;
-        self.work_range[i_var] = upper - lower;
-        self.work_lower_shift[i_var] = 0.0;
-        self.work_upper_shift[i_var] = 0.0;
+    /// set_work_bound for the variables from `first` on, negated (rows: the
+    /// bounds are -upper and -lower) if `negate`; by slices, so that the
+    /// stores vectorize
+    fn set_work_bounds(&mut self, first: usize, lower: &[f64], upper: &[f64], negate: bool) {
+        let r = first..first + lower.len();
+        let (wl, wu) = (&mut self.work_lower[r.clone()], &mut self.work_upper[r.clone()]);
+        if negate {
+            for ((w, &l), (wu, &u)) in wl.iter_mut().zip(lower).zip(wu.iter_mut().zip(upper)) {
+                *w = -l;
+                *wu = -u;
+            }
+        } else {
+            wl.copy_from_slice(lower);
+            wu.copy_from_slice(upper);
+        }
+        for ((range, &l), &u) in self.work_range[r.clone()].iter_mut().zip(&self.work_lower[r.clone()]).zip(&self.work_upper[r.clone()]) {
+            *range = u - l;
+        }
+        self.work_lower_shift[r.clone()].fill(0.0);
+        self.work_upper_shift[r].fill(0.0);
     }
 
     /// HEkk::initialiseLpColBound
     pub fn initialise_lp_col_bound(&mut self) {
-        for i_col in 0..self.num_col {
-            self.set_work_bound(i_col, self.col_lower[i_col], self.col_upper[i_col]);
-        }
+        let n = self.num_col;
+        let (lower, upper) = (self.col_lower, self.col_upper);
+        self.set_work_bounds(0, &lower[..n], &upper[..n], false);
     }
 
     /// HEkk::initialiseLpRowBound
     pub fn initialise_lp_row_bound(&mut self) {
-        for i_row in 0..self.num_row {
-            self.set_work_bound(self.num_col + i_row, -self.row_upper[i_row], -self.row_lower[i_row]);
-        }
+        let m = self.num_row;
+        let (lower, upper) = (self.row_lower, self.row_upper);
+        self.set_work_bounds(self.num_col, &upper[..m], &lower[..m], true);
     }
 
     /// HEkk::initialiseCost; `report` gets the figures that the caller

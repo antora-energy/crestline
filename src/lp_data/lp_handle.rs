@@ -3231,6 +3231,7 @@ mod tests {
                 ..Default::default()
             },
             model_name: b"small".to_vec(),
+            ..Default::default()
         }
     }
 

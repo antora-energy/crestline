@@ -285,6 +285,8 @@ pub fn scale_lp(o: &CLpOptions, lp: &mut Lp, force_scaling: bool) {
 
 /// HEkk::dualize on the engine's LP
 pub fn dualize(lps: &mut LpSolver, log: &Log) {
+    // The LP is rewritten: the matrix scaled in it is not the kept one
+    lps.lp.scaled.reset();
     let lp = &mut lps.lp.g;
     let d = &mut lps.dz;
     debug_assert!(lp.is_colwise());

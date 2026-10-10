@@ -997,6 +997,16 @@ fn factor_solve_error_with(e: &mut EkkView, solution_nonzero: &mut Vec<bool>, bt
 
 /// HEkk::rebuildRefactor
 pub fn rebuild_refactor(e: &mut EkkView, x: &CHekk, rebuild_reason: i32) -> bool {
+    rebuild_refactor_with(e, x, rebuild_reason, factor_solve_error)
+}
+
+/// rebuild_refactor with the factor's solve error given by `solve_error`
+pub fn rebuild_refactor_with(
+    e: &mut EkkView,
+    x: &CHekk,
+    rebuild_reason: i32,
+    solve_error: impl FnOnce(&mut EkkView) -> f64,
+) -> bool {
     // If no updates have been performed, then don't refactor!
     if *e.update_count == 0 {
         return false;
@@ -1020,7 +1030,7 @@ pub fn rebuild_refactor(e: &mut EkkView, x: &CHekk, rebuild_reason: i32) -> bool
         // test system
         let error_tolerance = x.rebuild_refactor_solution_error_tolerance;
         if error_tolerance > 0.0 {
-            let solution_error = factor_solve_error(e);
+            let solution_error = solve_error(e);
             refactor = solution_error > error_tolerance;
         }
     }
