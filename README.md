@@ -1,8 +1,13 @@
 # Crestline
 
-This MIP solver is based heavily on HiGHS but ported to Rust and augmented with [graph-based Large Neighborhood Search](./docs/dispatch.md). It also includes a number of additional optimizations discussed [here](./docs/performance.md).
+This MIP solver is based heavily on [HiGHS](https://github.com/ERGO-Code/HiGHS) but ported to Rust and augmented with [graph-based Large Neighborhood Search](./docs/dispatch.md). It also includes a number of additional optimizations discussed [here](./docs/performance.md). 
 
-It was built to solve power system dispatch problems: MIPs that are not amenable to local search, with optima too far from those of their LP relaxations for branch-and-bound to progress efficiently.
+As of this writing, it was programmed entirely by Claude Opus 5.5 with minimal guidance from me (@asross). My motivations in requesting it were:
+
+1. to solve real-world, highly constrained battery dispatch problems I found even commercial solvers like CPLEX and Gurobi had trouble with (not amenable to local search, with optima too far from those of their LP relaxations for branch-and-bound to progress efficiently)
+1. to close some of the performance gap between open-source and commercial solvers on such problems
+
+See below for instructions, additional details, and performance comparisons from Opus.
 
 ## Build
 
