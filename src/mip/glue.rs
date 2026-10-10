@@ -311,6 +311,10 @@ pub struct MipScalars {
     pub root_cuts_imported: bool,
     /// the main solver's concurrent helper (concurrent.rs), or null
     pub concurrent_lns: *mut super::concurrent::Main,
+    /// the root LP's effort estimate less the simplex iterations it took
+    /// (mip_root_lp_effort_from_basis), added to total_lp_iterations in the
+    /// graph LNS budgets
+    pub root_lp_credit: i64,
 }
 
 /// The options the solver reads (a copy per call)
@@ -349,6 +353,8 @@ pub struct MipOptions {
     pub mip_improving_solution_save: bool,
     pub mip_concurrent_crossover: bool,
     pub graph_lns_cost_perturbation: bool,
+    pub mip_root_lp_ipx: bool,
+    pub mip_root_lp_effort_from_basis: bool,
 }
 
 /// The original model (for solutions in the original space)
@@ -463,7 +469,7 @@ impl MipData {
           rootlpsol: f64, firstlpsol: f64, analytic_center: f64, incumbent: f64);
     vals!(feastol: f64, lower_bound: f64, upper_bound: f64, upper_limit: f64, optimality_limit: f64,
           avgrootlpiters: f64, firstrootlpiters: i64, total_lp_iterations: i64,
-          heuristic_lp_iterations: i64, sb_lp_iterations: i64, num_improving_sols: i32);
+          heuristic_lp_iterations: i64, sb_lp_iterations: i64, num_improving_sols: i32, root_lp_credit: i64);
 
     pub fn num_nodes(&self) -> i64 {
         // SAFETY: as vals
@@ -715,6 +721,14 @@ impl Lp {
     }
     pub fn avg_solve_iters(&self) -> f64 {
         self.sh().avg_solve_iters
+    }
+    /// The basic structural columns of the current basis (0 if none)
+    pub fn num_basic_cols(&self) -> i64 {
+        let b = &self.lph().lps.run.basis.b;
+        if !b.valid {
+            return 0;
+        }
+        b.col_status.iter().filter(|&&s| s == 1).count() as i64
     }
     pub fn set_adjust_symmetric_branching_col(&self, adjust: bool) {
         // SAFETY: as sh
@@ -1007,7 +1021,7 @@ mod tests {
     #[test]
     fn layouts() {
         // HighsMipScalars (static_assert in HighsPrimalHeuristics.cpp)
-        assert_eq!(std::mem::size_of::<MipScalars>(), 376);
+        assert_eq!(std::mem::size_of::<MipScalars>(), 384);
         assert_eq!(std::mem::offset_of!(MipScalars, pdi), 320);
         assert_eq!(std::mem::size_of::<HeurStats>(), 72);
         // HighsMipWorker::RsState (static_assert in HighsMipWorker.cpp)

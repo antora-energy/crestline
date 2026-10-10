@@ -287,12 +287,29 @@ impl MipData {
             // with a core to spare, IPX races the dual simplex on a large
             // first LP
             let nnz = self.a_start()[self.num_col as usize];
-            let race = !self.ob(op::FIRSTROOTBASIS_VALID) && self.ob(op::USE_CONCURRENT_HELPER) && nnz >= 10000;
-            self.oi(op::LP_SET_RACE_IPX, race as i64);
+            let no_basis = !self.ob(op::FIRSTROOTBASIS_VALID) && nnz >= 10000;
+            let race = if no_basis && o.mip_root_lp_ipx && !self.submip {
+                2
+            } else {
+                (no_basis && self.ob(op::USE_CONCURRENT_HELPER)) as i64
+            };
+            self.oi(op::LP_SET_RACE_IPX, race);
             let mut status = self.eval_root_lp_timed(w);
             self.oi(op::LP_SET_RACE_IPX, 0);
             if self.sc().num_restarts == 0 {
-                self.sc().firstrootlpiters = self.sc().total_lp_iterations;
+                let sc = self.sc();
+                sc.firstrootlpiters = sc.total_lp_iterations;
+                if o.mip_root_lp_effort_from_basis {
+                    // the root LP's effort, however it was solved: a dual
+                    // simplex from the slack basis brings each basic
+                    // structural column in, at 1.0-2.4 iterations per
+                    // column on the dispatch and MIPLIB LPs (the IPX
+                    // crossover basis has as many basic columns, within 3%
+                    // on the dispatch LPs)
+                    let effort = 2 * lp.num_basic_cols();
+                    sc.root_lp_credit = effort - sc.firstrootlpiters;
+                    sc.firstrootlpiters = effort;
+                }
             }
             self.o(op::LP_AFTER_FIRST_SOLVE);
             if status == lp_status::INFEASIBLE || status == lp_status::UNBOUNDED {
