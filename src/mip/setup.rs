@@ -386,6 +386,7 @@ impl MipData {
         sc.num_improving_sols = 0;
         sc.pruned_treeweight = CDouble::from(0.0);
         sc.avgrootlpiters = 0.0;
+        sc.root_lp_credit = 0;
         sc.num_nodes = 0;
         sc.num_nodes_before_run = 0;
         sc.num_leaves = 0;

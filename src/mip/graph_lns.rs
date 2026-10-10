@@ -723,11 +723,14 @@ impl Heur {
         let dfs_max_size = cmax(dfs_size0, cmin(1000.0, nd));
         let iters_fac = if deep { 10.0 } else { 3.0 };
         let mut since = 0;
-        let mut heur_iters_cap = (iters_fac * m.total_lp_iterations() as f64) as i64 + if deep { 5000 } else { 1000 };
+        // (with the root LP counted at its estimated effort, see
+        // mip_root_lp_effort_from_basis)
+        let total_lp_iterations = m.total_lp_iterations() + m.root_lp_credit();
+        let mut heur_iters_cap = (iters_fac * total_lp_iterations as f64) as i64 + if deep { 5000 } else { 1000 };
         // on large models, the quick search spends about one root LP's
         // worth of LP iterations
         if !deep {
-            heur_iters_cap = heur_iters_cap.min((m.total_lp_iterations() + 1000).max(20000));
+            heur_iters_cap = heur_iters_cap.min((total_lp_iterations + 1000).max(20000));
         }
         if max_lp_iters >= 0 {
             heur_iters_cap = heur_iters_cap.min(max_lp_iters);

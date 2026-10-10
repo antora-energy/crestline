@@ -40,7 +40,9 @@ pub struct LpS {
     basischeckpoint: Option<Arc<Basis>>,
     currentbasisstored: bool,
     solved_first_lp: bool,
-    race_ipx: bool,
+    /// the first LP without a basis: 1 IPX races the dual simplex, 2 IPX
+    /// with crossover solves it alone
+    race_ipx: i64,
     pub worker: *mut WorkerS,
     cutpool_ptrs: Vec<*mut CutPool>,
     degen_args: Option<DegenArgs>,
@@ -87,7 +89,7 @@ impl LpS {
             basischeckpoint: None,
             currentbasisstored: false,
             solved_first_lp: true,
-            race_ipx: false,
+            race_ipx: 0,
             worker: std::ptr::null_mut(),
             cutpool_ptrs: Vec::new(),
             degen_args: None,
@@ -115,7 +117,7 @@ impl LpS {
             basischeckpoint: other.basischeckpoint.clone(),
             currentbasisstored: other.currentbasisstored,
             solved_first_lp: true,
-            race_ipx: false,
+            race_ipx: 0,
             worker: std::ptr::null_mut(),
             cutpool_ptrs: Vec::new(),
             degen_args: None,
@@ -489,7 +491,7 @@ impl LpS {
     pub fn set_solved_first_lp(&mut self, v: bool) {
         self.solved_first_lp = v;
     }
-    pub fn set_race_ipx(&mut self, race: bool) {
+    pub fn set_race_ipx(&mut self, race: i64) {
         self.race_ipx = race;
     }
 
@@ -593,6 +595,8 @@ impl LpS {
         };
         let use_solver: &[u8] = if valid_basis {
             b"simplex"
+        } else if self.race_ipx == 2 {
+            b"ipx"
         } else if crate::lp_data::run::use_ipm(&o.mip_lp_solver) {
             if o.mip_lp_solver.as_slice() == b"hipo" {
                 b"hipo"
@@ -635,7 +639,7 @@ impl LpS {
             }
             ms.prof.set_submip(profiling_submip);
             ms.prof.solve_call(2, ms.submip);
-            if self.race_ipx && !valid_basis {
+            if self.race_ipx == 1 && !valid_basis {
                 let (s, ipx_won) = self.lph().optimize_racing_ipx(o.random_seed, &mut out.extra_iterations);
                 callstatus = s;
                 crate::log_user!(

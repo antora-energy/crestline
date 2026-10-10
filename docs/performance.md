@@ -173,7 +173,8 @@ Tried and rejected on the dispatch models:
   times faster LP on `dm_full_pert_s1_ramp`, but the MIP is slower (1.31
   geometric mean on the suite, seed 0): the quick LNS search budgets its LP
   iterations by the root LP's simplex iterations, which IPX does not have,
-  and the crossover vertex suits the dives less.
+  and the crossover vertex suits the dives less. With that budget
+  decoupled, see `mip_root_lp_ipx` below: still slower overall.
 - Concurrent FTRANs per dual iteration: not tried; on Lambda the second
   vCPU, when there is one, runs the LNS helper thread.
 
@@ -258,6 +259,106 @@ The solves that finish get clearly cheaper, but as for
 counts, are not better (worse on average, within the noise), so the
 option stays on. Graph LNS runs only for `mip_rel_gap >= 1e-3`: MIPLIB at
 the default gap is unaffected.
+
+### `mip_root_lp_ipx` and `mip_root_lp_effort_from_basis` (off by default; 2026-10-10)
+
+**How the heuristics depend on the root LP's simplex iterations.** The
+first root LP's iteration count is stored as `firstrootlpiters` and is
+also nearly all of `total_lp_iterations` when the quick graph LNS search
+starts. From them:
+- quick graph LNS: at most `min(3 T + 1000, max(T + 1000, 20000))` LP
+  iterations, `T = total_lp_iterations` (so "one root LP's worth" on
+  large models; the 20000 floor binds below `T` = 19000, i.e. on every
+  dispatch model but the ramp ones and lambda_080458);
+- deep graph LNS (root and tree rounds): `10 T + 5000`, where `T` now
+  also holds the cut loop and the quick search;
+- the flip search: `max(5000, firstrootlpiters)` per call; the LPs of
+  randomized rounding / tryRoundedPoint: `max(10000, 2 firstrootlpiters)`;
+  node LPs: `max(10000, 10 avgrootlpiters, 1.5 firstrootlpiters)`;
+- HiGHS's own heuristics (`moreHeuristicsAllowed`, `heuristic_effort`
+  0.05 of `total_lp_iterations` plus 10000 at the root, a ratio of the
+  tree's LP iterations later): the root LP is a small part of these.
+
+An LP solved by IPX counts no simplex iterations at all (crossover's
+pushes are not counted), so with IPX at the root `T` is about 0: the
+quick search gets 1000 LP iterations (on `dm_full_pert_s1_ramp`: 0
+neighbourhoods instead of the 2 dives that reach 1%), the flip and
+rounding LPs their floors. On two threads, when IPX wins the race, the
+dual simplex's iterations up to the interruption are counted instead,
+so the budget there depends on the race's timing.
+
+**The budget.** `mip_root_lp_effort_from_basis` counts the first root LP
+as `E` = twice the basic structural columns of its optimal basis, however
+it was solved (`firstrootlpiters = E`, and the graph LNS budgets add
+`E` less the counted iterations to `total_lp_iterations`). A dual simplex
+from the slack basis must bring each of these columns in: it took 1.0-2.4
+iterations per column on the 25 dispatch LPs (1.0-1.2 without ramp
+limits, 1.4-2.4 with them and on the lambda ticks) and 1.0-1.4 on MIPLIB
+(supportcase10: 12). The IPX crossover basis has as many basic columns
+(within 3% on every dispatch LP), so the count does not depend on the
+method. Rejected: rows (simplex iterations per row range from 0.006 on
+sorrell3 to 1.1), time or work measures (not deterministic), crossover or
+IPM iterations (no fixed relation to simplex work).
+`mip_root_lp_ipx` solves the first root LP of the main MIP with IPX and
+crossover alone (no race), when it has at least 10000 nonzeros.
+
+**Root LP alone** (instructions to the end of the first root LP, presolve
+included, deterministic): IPX / dual simplex is 0.39-0.58 on the lambda
+ticks, 0.40-0.75 on the full ramp models, 0.53-0.68 on four small models,
+but 2.2-2.8 on every noramp model of medium or full size, 1.8 on
+`hard_10-03`, 1.0 on `diverse_10-01`; MIPLIB: supportcase10 0.11,
+app1-2 2.1, sorrell3 1.35, rd-rplusc-21 1.12. IPX wins exactly where the
+dual simplex takes many iterations per basic column (dense B^-1).
+
+**MIP** (dispatch suite, `mip_rel_gap = 0.01`, 180 s, seeds 0-15 at one
+thread, 0-7 at two; instructions, geometric mean of per-instance
+geometric means over runs all three configs solve, against (a) default;
+the M1 was heavily oversubscribed by other benchmarks (load 20-190), so
+the wall-clock limit cut runs short: the solved counts and the gaps at the
+limit are noisy, configurations were interleaved so the load fell on them
+alike):
+
+| | (b) + effort from basis | (c) + IPX root + effort from basis |
+|---|---|---|
+| one thread, 23 models | 1.004 | 1.184 |
+| ... lambda_080458, wind185, 3c1b60d6 | 0.997, 0.997, 0.999 | 0.444, 0.822, 0.927 |
+| ... full / medium ramp models | 1.000-1.087 | 0.704-0.937 |
+| ... 14 noramp models | 0.995-1.012 | 1.087-2.315 (all worse) |
+| one thread, runs solved (of 400) | 347 (a: 344) | 342 |
+| one thread, `hard_10-03` / `diverse_10-01` mean gap | 2.09% / 1.48% (a: 1.99% / 1.86%) | 1.97% / 1.60% |
+| two threads, 23 models (instructions of both threads) | 1.020 | 1.032 (wall 1.288: (a) races IPX on the second core) |
+| two threads, runs solved (of 200) | 184 (a: 184) | 184 |
+| two threads, `hard_10-03` / `diverse_10-01` mean gap | 1.60% / 1.26% (a: 1.62% / 1.22%) | 1.63% / 1.22% |
+
+In a two-seed pilot, IPX at the root without the new budget was 1.72:
+decoupling the budget recovers most of the collapse (1.72 -> 1.24 on
+those seeds), and (b) shows the budget itself is neutral with a simplex
+root. What remains is the root LP: IPX is 2-3 times dearer than the dual
+simplex on the noramp models.
+
+MIPLIB (ex9, app1-2, sorrell3, supportcase10, rd-rplusc-21; 2 seeds,
+300 s, `mip_rel_gap = 0.01`, one thread): (b) changes nothing; with (c)
+supportcase10 ends at 81% and 94% (a: 100%, incumbent 21 against 70 on
+seed 0), the others end as (a) (ex9 optimal, sorrell3 317%, app1-2 and
+rd-rplusc-21 without a solution in all three).
+
+**Choosing the method adaptively** (one thread): no feature known before
+the solve separates the two groups (nonzeros per row: 3.4 noramp, 3.6-3.9
+for both winners and losers). A probe does better: after a quarter of the
+rows' worth of dual simplex iterations, the basic structural columns per
+iteration are 0.79-0.86 on the models where IPX wins and 0.86-0.98 where
+it loses (0.76-0.83 on four small models, either way). A rule "IPX if
+that ratio is below 0.85 and the LP has at least 20000 rows" would pick
+4 of the 6 large IPX winners, about 0.97 of the suite's instructions, but the
+threshold sits within 0.01 of misclassified models, was fitted on these
+same 25 instances, and misses supportcase10 (0.997 basic columns per
+iteration at 3000 iterations). Not implemented; on two threads the race
+already makes this choice.
+
+So both options stay off: IPX for the root LP wins only on the ramp and
+lambda models, and loses more on the rest. The effort-from-basis budget
+is the right one to pair with any future non-simplex root (or the race),
+and is neutral otherwise.
 
 ## Other platforms
 

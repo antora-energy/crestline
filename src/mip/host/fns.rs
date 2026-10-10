@@ -78,6 +78,7 @@ pub fn scalars_default() -> MipScalars {
         lns_tree_next: -1,
         lns_tree_wait: 0,
         lns_quick_lp_iterations: 0,
+        root_lp_credit: 0,
         concurrent_lns_seen: 0,
         pdi: Pdi::default(),
         cliques_extracted: false,
@@ -853,7 +854,7 @@ unsafe fn root_op(ms: &mut MipSolver, which: i32, w: P, i: i64, x: f64) -> f64 {
                 lp.set_option("output_flag", OptValue::Bool(ms.opts.output_flag));
             }
         }
-        120 => d.get_lp().set_race_ipx(i != 0),
+        120 => d.get_lp().set_race_ipx(i),
         121 => return use_concurrent_helper(ms) as i32 as f64,
         122 => return d.firstrootbasis.b.valid as i32 as f64,
         123 => {
