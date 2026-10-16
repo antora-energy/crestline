@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches-ignore: ['bench-dispatch/**']
+    branches-ignore: ['bench-dispatch/**', 'bench-std/**']
   pull_request:
 
 jobs:
@@ -11,6 +11,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --release
+      - run: python3 bench/std.py selftest
       - run: cargo build --release --bin crest
 
   # crest against the C++ highs app of a pinned HiGHS commit (gcc, no FMA
