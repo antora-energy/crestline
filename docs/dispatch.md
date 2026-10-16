@@ -107,14 +107,16 @@ shut, and one thread keeps the randomized-rounding incumbent (63% gap) for
 180 s while the root cut loop runs. With the option:
 - the quick search's dives stop at its LP iteration budget, like its
   neighbourhoods;
-- if the quick search did not improve the incumbent and the gap is
-  above three times the target, the main solver runs the deep search
-  right away (before the root cuts) on one root LP's worth of LP
-  iterations (at least 5000), and again while a round closes 1% of the
-  gap. A helper thread, when there is one, runs the deep search anyway,
-  so the option does nothing there.
+- if the quick search then tried no neighbourhood and the gap is above
+  three times the target, the main solver runs the deep search right
+  away (before the root cuts) on one root LP's worth of LP iterations
+  (at least 5000), and again while a round closes 1% of the gap. A
+  helper thread, when there is one, runs the deep search anyway, so the
+  option does nothing there.
 
-Results in [performance.md](./performance.md): DISPATCH_SUMMARY
+It changes nothing where the quick search tried a neighbourhood: on the
+dispatch ticks (no run of 400 fired it on the M1) and on all but three of
+47 MIPLIB instances.
 
 ## MIPLIB unit commitment models
 
