@@ -279,6 +279,7 @@ pub struct CHekk {
     pub control_iteration_count0: i32,
     pub allow_dual_steepest_edge_to_devex_switch: bool,
     pub dual_steepest_edge_weight_log_error_threshold: f64,
+    pub dse_to_devex_density: f64,
     pub dual_edge_weight_strategy: i32,
     pub run_quiet: bool,
     // simplex_nla_.factor_

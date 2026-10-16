@@ -1354,6 +1354,13 @@ impl<'a> Dual<'a> {
         let mut switch_to_devex = false;
         // Firstly consider switching on the basis of NLA cost
         let row_dse_density = *self.e.row_dse_density;
+        // Crestline: on the density of the DSE FTRAN alone. Where B^-1 is
+        // dense (equality chains of dispatch models), every solve is
+        // dense, so the relative test below does not fire, but the DSE
+        // FTRAN (on a dense row of B^-1) is the dearest of them
+        if x.allow_dual_steepest_edge_to_devex_switch && row_dse_density > x.dse_to_devex_density {
+            return true;
+        }
         let costly_dse_measure_denominator =
             std_max(std_max(*self.e.row_ep_density, *self.e.col_aq_density), *self.e.row_ap_density);
         if costly_dse_measure_denominator > 0.0 {

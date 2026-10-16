@@ -215,6 +215,7 @@ struct Info {
     dual_col_density: f64,
     allow_dual_steepest_edge_to_devex_switch: bool,
     dual_steepest_edge_weight_log_error_threshold: f64,
+    dse_to_devex_density: f64,
     costly_dse_frequency: f64,
     num_costly_dse_iteration: i32,
     costly_dse_measure: f64,
@@ -322,6 +323,7 @@ pub struct LpsOptions {
     pub dual_simplex_cost_perturbation_multiplier: f64,
     pub primal_simplex_bound_perturbation_multiplier: f64,
     pub dual_steepest_edge_weight_log_error_threshold: f64,
+    pub simplex_dse_to_devex_density: f64,
     pub cost_scale_factor: i32,
     pub log_dev_level: i32,
     /// *log_options.log_dev_level, if *log_options.output_flag, else 0
@@ -809,6 +811,7 @@ impl LpSolver {
         info.primal_simplex_bound_perturbation_multiplier = 1.0;
         info.allow_dual_steepest_edge_to_devex_switch = false;
         info.dual_steepest_edge_weight_log_error_threshold = 0.0;
+        info.dse_to_devex_density = f64::INFINITY;
         info.run_quiet = false;
         info.store_squared_primal_infeasibility = false;
         info.allow_cost_shifting = true;
@@ -995,6 +998,7 @@ impl LpSolver {
         info.allow_dual_steepest_edge_to_devex_switch =
             env.opt.simplex_dual_edge_weight_strategy == SIMPLEX_EDGE_WEIGHT_STRATEGY_CHOOSE;
         info.dual_steepest_edge_weight_log_error_threshold = env.opt.dual_steepest_edge_weight_log_error_threshold;
+        info.dse_to_devex_density = env.opt.simplex_dse_to_devex_density;
         info.control_iteration_count0 = self.sh.iteration_count;
         self.sh.info.col_aq_density = 0.0;
         self.sh.info.row_ep_density = 0.0;
@@ -2205,6 +2209,7 @@ impl LpSolver {
             control_iteration_count0: self.info.control_iteration_count0,
             allow_dual_steepest_edge_to_devex_switch: self.info.allow_dual_steepest_edge_to_devex_switch,
             dual_steepest_edge_weight_log_error_threshold: self.info.dual_steepest_edge_weight_log_error_threshold,
+            dse_to_devex_density: self.info.dse_to_devex_density,
             dual_edge_weight_strategy: self.sh.info.dual_edge_weight_strategy,
             run_quiet: self.info.run_quiet,
             hfactor_pivot_threshold: sh(&mut self.fs.pivot_threshold),

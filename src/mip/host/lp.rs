@@ -639,6 +639,12 @@ impl LpS {
             }
             ms.prof.set_submip(profiling_submip);
             ms.prof.solve_call(2, ms.submip);
+            // A first root LP may switch from DSE to Devex where the DSE
+            // FTRAN is dense (later solves start from the weights it leaves)
+            let devex_switch = !valid_basis && !ms.submip && o.mip_root_lp_devex_density < f64::INFINITY;
+            if devex_switch {
+                self.set_option("simplex_dse_to_devex_density", OptValue::Double(o.mip_root_lp_devex_density));
+            }
             if self.race_ipx == 1 && !valid_basis {
                 let (s, ipx_won) = self.lph().optimize_racing_ipx(o.random_seed, &mut out.extra_iterations);
                 callstatus = s;
@@ -648,20 +654,11 @@ impl LpS {
                     "Root LP: %s won the race on two threads\n",
                     if ipx_won { "IPX" } else { "the dual simplex" }
                 );
-            } else if o.mip_root_lp_devex && !valid_basis && !ms.submip && self.num_rows() >= 20000 {
-                // Devex for a large first root LP: cheaper per iteration
-                // than DSE where B^-1 is dense (dispatch models). From
-                // 20000 rows, as the MIP's LPs get no exact DSE weights
-                // (simplex_dse_exact_init_max_rows) anyway
-                let strategy = match self.lph().opts.get("simplex_dual_edge_weight_strategy") {
-                    Some(OptValue::Int(v)) => v,
-                    _ => -1,
-                };
-                self.set_option("simplex_dual_edge_weight_strategy", OptValue::Int(1));
-                callstatus = self.lph().optimize_lp();
-                self.set_option("simplex_dual_edge_weight_strategy", OptValue::Int(strategy));
             } else {
                 callstatus = self.lph().optimize_lp();
+            }
+            if devex_switch {
+                self.set_option("simplex_dse_to_devex_density", OptValue::Double(f64::INFINITY));
             }
         }
         self.set_option("solver", OptValue::Str(&solver));
