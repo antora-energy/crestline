@@ -8,7 +8,7 @@
 //! or after it (libstdc++: _M_insert_multi_node with an equivalent hint).
 
 use super::*;
-use crate::util::hash::{double_hash_code, sparse_combine};
+use crate::util::hash::{double_hash_code, monomial_m61, sparse_combine_mono};
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
@@ -93,6 +93,9 @@ impl Presolve<'_> {
             }
         }
 
+        // the monomials of sparse_combine, once per index
+        let col_mono: Vec<u64> = (0..self.num_col).map(monomial_m61).collect();
+        let row_mono: Vec<u64> = (0..self.num_row).map(monomial_m61).collect();
         for i in 0..nnz {
             if self.a_value[i] == 0.0 {
                 continue;
@@ -102,14 +105,14 @@ impl Presolve<'_> {
             if self.colsize[ac] == 1 {
                 col_hashes[ac] = self.a_row[i] as i64 as u64;
             } else {
-                sparse_combine(
+                sparse_combine_mono(
                     &mut row_hashes[ar],
-                    self.a_col[i],
+                    col_mono[ac],
                     double_hash_code(self.a_value[i] / row_max[ar].0) as u64,
                 );
-                sparse_combine(
+                sparse_combine_mono(
                     &mut col_hashes[ac],
-                    self.a_row[i],
+                    row_mono[ar],
                     double_hash_code(self.a_value[i] / col_max[ac].0) as u64,
                 );
             }
