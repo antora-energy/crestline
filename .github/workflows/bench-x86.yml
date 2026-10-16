@@ -61,7 +61,7 @@ jobs:
           cp target/release/crest crest-default
           RUSTFLAGS="${{ matrix.cpu }}" CARGO_ARGS="--features \"$EXACT\"" bash bench/pgo_build.sh
           cp target/release/crest crest-pgo
-          (cd crest-main && RUSTFLAGS="$FLAGS" cargo build --release --bin crest --features "libstdcxx no_fma hyper_dfs" \
+          (cd crest-main && RUSTFLAGS="$FLAGS" cargo build --release --bin crest --features "libstdcxx no_fma" \
             && cp target/release/crest ../crest-main-bin)
       - name: MIPLIB instances
         run: |
