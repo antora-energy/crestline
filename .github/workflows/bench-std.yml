@@ -1,14 +1,14 @@
 # Standard benchmarks (docs/benchmarks.md): crest against the latest HiGHS
 # release, SCIP (pyscipopt) and CBC (Ubuntu's coinor-cbc) on MIPLIB 2017
 # benchmark, MIPFEAS and LP sets, downloaded at run time (actions/cache).
-# Run by hand (workflow_dispatch), or by pushing a branch bench-std/* whose
+# Run by hand (workflow_dispatch), or by pushing a branch bench-std-run/* whose
 # commit sets the defaults in `env`. Instances are sharded over runners; on
 # each runner every instance runs all solvers back to back. Results: the
 # std-results artifact (JSONL) and the run summary (bench/std.py report).
 name: bench-std
 on:
   push:
-    branches: ['bench-std/**']
+    branches: ['bench-std-run/**']
   workflow_dispatch:
     inputs:
       suite:
