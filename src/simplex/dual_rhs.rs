@@ -62,6 +62,40 @@ pub struct DualRhs {
     part_num: i32,
     part_switch: i32,
     work_partition: Vec<i32>,
+    /// Crestline: the slots (rows in dense mode, list positions in sparse
+    /// mode) that may hold a row with positive infeasibility: a superset,
+    /// so that choose_normal visits only these, in the same order, and
+    /// clears those found feasible. Valid while live_valid
+    live: Vec<u64>,
+    live_valid: bool,
+    /// The list position of each row in the list (sparse mode)
+    work_pos: Vec<i32>,
+}
+
+/// Calls f(slot) for each set bit of `bits` in lo..hi, in increasing order;
+/// f returns whether to keep the bit
+#[inline]
+fn for_each_live(bits: &mut [u64], lo: usize, hi: usize, mut f: impl FnMut(usize) -> bool) {
+    if lo >= hi {
+        return;
+    }
+    let (w_lo, w_hi) = (lo >> 6, (hi - 1) >> 6);
+    for w in w_lo..=w_hi {
+        let mut word = bits[w];
+        if w == w_lo {
+            word &= !0u64 << (lo & 63);
+        }
+        if w == w_hi && hi & 63 != 0 {
+            word &= !(!0u64 << (hi & 63));
+        }
+        while word != 0 {
+            let bit = word.trailing_zeros() as usize;
+            word &= word - 1;
+            if !f((w << 6) | bit) {
+                bits[w] &= !(1u64 << bit);
+            }
+        }
+    }
 }
 
 /// The best row by merit infeasibility / weight over rows, starting at a
@@ -82,19 +116,30 @@ impl DualRhs {
         self.work_mark.resize(n, 0);
         self.work_index.resize(n, 0);
         self.work_infeasibility.resize(n, 0.0);
+        self.work_pos.resize(n, 0);
+        self.live.resize(n.div_ceil(64), 0);
+        self.live_valid = false;
         self.part_num = 0;
         self.part_switch = 0;
     }
 
+    /// choose_normal: `use_live` false while taboo rows are zeroed (the
+    /// slots of the live superset are then neither used nor cleared)
     pub fn choose_normal(
         &mut self,
         edge_weight: &[f64],
         dwork: &mut [f64],
         random: &mut HighsRandom,
         num_row: i32,
+        use_live: bool,
     ) -> i32 {
         if self.work_count == 0 {
             return -1;
+        }
+        if !use_live {
+            self.live_valid = false;
+        } else if !self.live_valid {
+            self.rebuild_live(num_row);
         }
         let infeas = &self.work_infeasibility[..];
         let edge_weight = &edge_weight[..infeas.len()];
@@ -115,18 +160,34 @@ impl DualRhs {
                 }
             }
         };
+        // The rows considered in the wrapped order, skipping the slots
+        // known to hold no infeasibility: consider() changes nothing for
+        // them, so the choice is the same
+        macro_rules! scan {
+            ($n:expr, $row:expr) => {{
+                let n = $n as usize;
+                let random_start = random.integer_below($n) as usize;
+                if use_live {
+                    let mut f = |slot: usize| {
+                        let i_row = $row(slot);
+                        consider(i_row);
+                        infeas[i_row] > K_HIGHS_ZERO
+                    };
+                    for_each_live(&mut self.live, random_start, n, &mut f);
+                    for_each_live(&mut self.live, 0, random_start, &mut f);
+                } else {
+                    wrapped(n, random_start, |slot| consider($row(slot)));
+                }
+            }};
+        }
         if self.work_count < 0 {
             // DENSE mode
-            let n = -self.work_count;
-            let random_start = random.integer_below(n) as usize;
-            wrapped(n as usize, random_start, &mut consider);
+            scan!(-self.work_count, |i: usize| i);
             best_index
         } else {
             // SPARSE mode
-            let n = self.work_count;
-            let random_start = random.integer_below(n) as usize;
             let index = &self.work_index;
-            wrapped(n as usize, random_start, |i| consider(index[i] as usize));
+            scan!(self.work_count, |i: usize| index[i] as usize);
             let create_list_again = if best_index == -1 {
                 self.work_cutoff > 0.0
             } else {
@@ -134,10 +195,41 @@ impl DualRhs {
             };
             if create_list_again {
                 self.create_infeas_list(0.0, edge_weight, dwork, num_row);
-                best_index = self.choose_normal(edge_weight, dwork, random, num_row);
+                best_index = self.choose_normal(edge_weight, dwork, random, num_row, use_live);
             }
             best_index
         }
+    }
+
+    /// The live slots afresh: those of the rows with positive
+    /// infeasibility (rows in dense mode, list positions in sparse mode)
+    fn rebuild_live(&mut self, num_row: i32) {
+        self.live.fill(0);
+        let infeas = &self.work_infeasibility;
+        if self.work_count < 0 {
+            for (i, &v) in infeas[..num_row as usize].iter().enumerate() {
+                self.live[i >> 6] |= ((v > K_HIGHS_ZERO) as u64) << (i & 63);
+            }
+        } else {
+            for (pos, &i_row) in self.work_index[..self.work_count as usize].iter().enumerate() {
+                self.work_pos[i_row as usize] = pos as i32;
+                self.live[pos >> 6] |= ((infeas[i_row as usize] > K_HIGHS_ZERO) as u64) << (pos & 63);
+            }
+        }
+        self.live_valid = true;
+    }
+
+    /// Mark the slot of a row whose infeasibility may now be positive
+    #[inline]
+    fn set_live(&mut self, i_row: usize) {
+        let slot = if self.work_count < 0 {
+            i_row
+        } else if self.work_mark[i_row] != 0 {
+            self.work_pos[i_row] as usize
+        } else {
+            return;
+        };
+        self.live[slot >> 6] |= 1u64 << (slot & 63);
     }
 
     /// Returns the number of rows chosen
@@ -300,6 +392,11 @@ impl DualRhs {
                 update!(i as usize);
             }
         }
+        // The live slots are set by update_infeas_list, over the column's
+        // indices (and not after excessive values)
+        if column_count < 0 || num_excessive_primal != 0 {
+            self.live_valid = false;
+        }
         num_excessive_primal == 0
     }
 
@@ -307,16 +404,28 @@ impl DualRhs {
         let i_row = i_row as usize;
         p.base_value[i_row] = value;
         self.work_infeasibility[i_row] = p.infeasibility(i_row);
+        self.set_live(i_row);
     }
 
     pub fn update_infeas_list(&mut self, column_index: &[i32], edge_weight: &[f64]) {
-        // DENSE mode: disabled
+        // DENSE mode: disabled (but for the live slots)
         if self.work_count < 0 {
+            for &i_row in column_index {
+                let r = i_row as usize;
+                if self.work_infeasibility[r] > K_HIGHS_ZERO {
+                    self.live[r >> 6] |= 1u64 << (r & 63);
+                }
+            }
             return;
         }
         let infeas = &self.work_infeasibility;
         for &i_row in column_index {
             let r = i_row as usize;
+            if infeas[r] > K_HIGHS_ZERO {
+                // The row's slot: its position, or the one it is appended at
+                let pos = if self.work_mark[r] != 0 { self.work_pos[r] } else { self.work_count } as usize;
+                self.live[pos >> 6] |= 1u64 << (pos & 63);
+            }
             if self.work_mark[r] == 0
                 && (if self.work_cutoff <= 0.0 {
                     infeas[r] != 0.0
@@ -325,6 +434,7 @@ impl DualRhs {
                 })
             {
                 self.work_index[self.work_count as usize] = i_row;
+                self.work_pos[r] = self.work_count;
                 self.work_count += 1;
                 self.work_mark[r] = 1;
             }
@@ -335,6 +445,7 @@ impl DualRhs {
         for i in 0..num_row as usize {
             self.work_infeasibility[i] = p.infeasibility(i);
         }
+        self.live_valid = false;
     }
 
     /// dwork is HEkk's scattered_dual_edge_weight_, used as workspace. Only
@@ -419,6 +530,7 @@ impl DualRhs {
             self.work_count = -num_row;
             self.work_cutoff = 0.0;
         }
+        self.rebuild_live(num_row);
     }
 }
 
@@ -449,7 +561,7 @@ mod tests {
         assert!(rhs.work_count > 0 && rhs.work_cutoff > 0.0);
         let max = rhs.work_infeasibility.iter().cloned().fold(0.0, f64::max);
         let mut random = HighsRandom::new(0);
-        let r = rhs.choose_normal(&weight, &mut dwork, &mut random, n);
+        let r = rhs.choose_normal(&weight, &mut dwork, &mut random, n, true);
         assert_eq!(rhs.work_infeasibility[r as usize], max);
         // Making the chosen row feasible
         rhs.update_pivots(r, 0.5, &mut p);

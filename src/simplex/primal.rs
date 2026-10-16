@@ -328,7 +328,9 @@ impl Primal {
             Op::InitialisePartitionedRowwiseMatrix => hekk::initialise_partitioned_rowwise_matrix(e, x),
             Op::ClearBadBasisChangeTabooFlag => x.records().clear_taboo_flag(),
             Op::TabooBadBasisChange => return x.records().taboo() as i32,
-            Op::ApplyTabooVariableIn => x.records().apply_taboo(e.work_dual, 0.0, 1),
+            Op::ApplyTabooVariableIn => {
+                x.records().apply_taboo(e.work_dual, 0.0, 1);
+            }
             Op::UnapplyTabooVariableIn => x.records().unapply_taboo(e.work_dual, 1),
             Op::IsBadBasisChange => return hekk::is_bad_basis_change(e, x, a, b, c) as i32,
             Op::BasisChanged => {

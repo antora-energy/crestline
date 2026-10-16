@@ -119,14 +119,18 @@ impl BasisRecords {
     }
 
     /// HEkk::applyTabooRowOut (which = 0) and applyTabooVariableIn (1)
-    pub fn apply_taboo(&mut self, values: &mut [f64], overwrite_with: f64, which: i32) {
+    /// Returns whether no value was overwritten
+    pub fn apply_taboo(&mut self, values: &mut [f64], overwrite_with: f64, which: i32) -> bool {
+        let mut none = true;
         for r in &mut self.bad {
             if r.taboo {
                 let i = if which == 0 { r.row_out } else { r.variable_in } as usize;
                 r.save_value = values[i];
                 values[i] = overwrite_with;
+                none = false;
             }
         }
+        none
     }
 
     /// HEkk::unapplyTabooRowOut (which = 0) and unapplyTabooVariableIn (1):
