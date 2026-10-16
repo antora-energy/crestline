@@ -593,7 +593,6 @@ options! {
     mip_root_lp_ipx: bool = false;
     mip_root_lp_effort_from_basis: bool = false;
     mip_graph_lns_deep_early: bool = false;
-    mip_graph_lns_pool_moves: bool = false;
     mip_heuristic_run_root_reduced_cost: bool = true;
     mip_heuristic_run_zi_round: bool = false;
     mip_heuristic_run_shifting: bool = false;
@@ -762,7 +761,7 @@ mod tests {
     #[test]
     fn names_set_and_get() {
         let mut o = Opts::default();
-        assert_eq!(NAMES.len(), 167);
+        assert_eq!(NAMES.len(), 166);
         assert!(o.set("presolve", OptValue::Str(b"off")));
         assert_eq!(o.presolve, b"off");
         assert!(o.set("time_limit", OptValue::Int(3)));

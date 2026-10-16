@@ -547,7 +547,7 @@ neighbourhood, did not improve, and the deep search's gate ("quick search
 improved and gap within 3x the target") stayed shut; the root cut loop
 then takes the rest of the time.
 
-Three options, all off by default. Method as above (`bench-dispatch`
+Options off by default. Method as above (`bench-dispatch`
 workflow: 25 dispatch models plus `miplib/*.mps.gz` = uccase9, unitcal_7,
 irish-electricity, buildingenergy; 16 seeds, `mip_rel_gap = 0.01`,
 180 s, paired on one runner; local MIPLIB checks with the instruction
@@ -588,28 +588,18 @@ air05 and app1-1 solve with 1.13 and 1.41 the instructions, qap10 1.01,
 cvs16r128-89 ends at 29.35% instead of 27.96%. Local M1 on uccase9 (seed
 0-3): 29842 -> 11904-13375; thor50dday (seed 0): 59092 -> 57298.
 
-**`mip_graph_lns_pool_moves`**: a fifth deep-search move (ReXi-style
-crossover): the decision columns where one of the last four incumbents
-disagrees with the current one are freed (a random part if more than the
-move's size; grown by breadth-first search from them if fewer), the rest
-fixed, and searched by branch and bound; the UCB bandit picks it like the
-others.
-
-| pool against base, 16 seeds | x86_64 | arm64 |
-|---|---|---|
-| one thread: solved runs | 390 -> 389 | 387 -> 385 |
-| one thread: time, geometric mean over solved models | 1.016 | 1.009 |
-| one thread: `hard_10-03` / `diverse_10-01` gap at 180 s | +0.009 +- 0.059 / +0.038 +- 0.049 (solved 4 -> 2) | +0.026 +- 0.058 / +0.035 +- 0.053 (solved 3 -> 1) |
-| one thread: uccase9 gap | -0.09 +- 0.19 | +0.11 +- 0.23 |
-| two threads: solved runs | 396 -> 393 | 395 -> 397 |
-| two threads: time | 1.002 | 1.005 |
-| two threads: `hard_10-03` / `diverse_10-01` gap | -0.014 +- 0.032 / +0.014 +- 0.028 (solved 12 -> 9) | -0.030 +- 0.041 / +0.014 +- 0.031 (11 -> 13) |
-| two threads: uccase9 mean primal gap | +1.32 +- 1.36 | +1.02 +- 1.82 |
-
-On the dispatch ticks the incumbents of a run differ in a few columns
-(each came from a neighbourhood of the last), so the move is mostly the
-"grown from the recent changes" variant, which the BFS moves already
-cover. Nothing gains; stays off.
+**Tried and rejected (code removed): a pool recombination move.** A
+fifth deep-search move in the style of ReXi crossover: free the decision
+columns where one of the last four incumbents disagrees with the current
+one (a random part if more than the move's size, grown by breadth-first
+search if fewer), fix the rest, search by branch and bound. Against base,
+16 seeds, x86_64 / arm64: one thread, solved 390 -> 389 / 387 -> 385,
+time 1.016 / 1.009, `diverse_10-01` solved 4 -> 2 / 3 -> 1, `hard_10-03`
+gap +0.009 +- 0.059 / +0.026 +- 0.058; two threads, time 1.002 / 1.005,
+uccase9 mean primal gap +1.3 / +1.0 points. The incumbents of a run differ
+in a few columns (each came from a neighbourhood of the last), so the move
+is mostly a BFS grown from recent changes, which the BFS moves already
+cover.
 
 **`mip_concurrent_crossover`** (existing, two threads): 1.116 (x86_64) and
 1.126 (arm64) of the time on the solved models (3c1b60d6 1.58 and 1.59,

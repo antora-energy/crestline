@@ -903,16 +903,6 @@ pub const RECORDS: &[Meta] = &[
     Meta {
         type_: BOOL,
         advanced: false,
-        name: "mip_graph_lns_pool_moves",
-        description: "Whether the deep graph LNS search has a fifth move: the decision columns where one of the last four incumbents disagrees with the current one, the rest fixed, searched by branch and bound",
-        bool_default: false,
-        int: (0, 0, 0),
-        dbl: (0.0, 0.0, 0.0),
-        str_default: "",
-    },
-    Meta {
-        type_: BOOL,
-        advanced: false,
         name: "mip_heuristic_run_root_reduced_cost",
         description: "Use the rootReducedCost heuristic",
         bool_default: true,

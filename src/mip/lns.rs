@@ -89,7 +89,7 @@ pub struct LnsMove {
 /// The deep search's choice of move type: each once, then the best rate
 /// of gap closed per LP iteration plus an exploration bonus. Counts the
 /// try in `deep_tries`.
-pub fn select_type(types: &[LnsMove; 5], deep_tries: &mut [i32; 5], flips_exhausted: bool, pool_ok: bool) -> usize {
+pub fn select_type(types: &[LnsMove; 4], deep_tries: &mut [i32; 4], flips_exhausted: bool) -> usize {
     let mut max_rate = 0.0;
     let mut num_tried = 0;
     for t in types {
@@ -101,7 +101,7 @@ pub fn select_type(types: &[LnsMove; 5], deep_tries: &mut [i32; 5], flips_exhaus
     let mut best_score = -1.0;
     let mut ty = 3;
     for (t, m) in types.iter().enumerate() {
-        if (t == 2 && flips_exhausted) || (t == 4 && !pool_ok) {
+        if t == 2 && flips_exhausted {
             continue;
         }
         let score = if m.tried == 0 || (deep_tries[t] == 0 && t != 3) {
@@ -129,8 +129,6 @@ pub struct Lns {
     promise: Vec<f64>,
     promise_total: f64,
     pub neighbourhood: Vec<i32>,
-    /// seeds to take first (the pool recombination move)
-    pub pool_seeds: Vec<i32>,
     frontier: Vec<i32>,
     next: Vec<i32>,
     touched_rows: Vec<i32>,
@@ -175,7 +173,6 @@ impl Lns {
             promise: vec![0.0; num_col],
             promise_total: 0.0,
             neighbourhood: Vec::new(),
-            pool_seeds: Vec::new(),
             frontier: Vec::new(),
             next: Vec::new(),
             touched_rows: Vec::new(),
@@ -188,12 +185,6 @@ impl Lns {
     /// pickSeed
     fn pick_seed(&mut self, deep: bool, inc: &[f64], relax: &[f64], glo: &[f64], gup: &[f64], rng: &mut HighsRandom) -> i32 {
         let mut seed: i32 = -1;
-        // the pool recombination move's seeds first
-        while let Some(c) = self.pool_seeds.pop() {
-            if self.in_n[c as usize] == 0 && glo[c as usize] != gup[c as usize] {
-                return c;
-            }
-        }
         let r = if deep { rng.fraction() } else { 0.5f64.mul_add_c(rng.fraction(), 0.5) };
         if r < 0.5 && self.promise_total > 0.0 {
             let mut pick = rng.fraction() * self.promise_total;
@@ -300,18 +291,6 @@ impl Lns {
                 }
                 std::mem::swap(&mut self.frontier, &mut self.next);
             }
-        }
-    }
-
-    /// A given neighbourhood (the pool recombination move)
-    pub fn set(&mut self, cols: &[i32]) {
-        for &c in &self.neighbourhood {
-            self.in_n[c as usize] = 0;
-        }
-        self.neighbourhood.clear();
-        self.neighbourhood.extend_from_slice(cols);
-        for &c in cols {
-            self.in_n[c as usize] = 1;
         }
     }
 
@@ -425,21 +404,5 @@ mod tests {
         let cur = [1.0, 0.0, 1.0];
         lns.find_partners(&g, 1, &cur, &z, &[1.0; 3], &[-1.0, -2.0, -3.0]);
         assert_eq!(lns.partners.iter().map(|p| p.1).collect::<Vec<_>>(), vec![0, 2]);
-        // the pool move's seeds come first: from x2 alone, size 1
-        lns.pool_seeds = vec![2];
-        lns.build(&g, 4, 1, true, &z, &z, &z, &[1.0; 3], &mut rng);
-        assert_eq!(lns.neighbourhood, vec![2]);
-        assert!(lns.pool_seeds.is_empty());
-    }
-
-    #[test]
-    fn pool_move_only_when_available() {
-        let t = [LnsMove { tried: 1, rate: 0.1, ..Default::default() }; 5];
-        let mut tries = [1; 5];
-        let pick = |ok| (0..20).map(|_| select_type(&t, &mut tries.clone(), false, ok)).any(|ty| ty == 4);
-        assert!(!pick(false));
-        let mut t4 = t;
-        t4[4].tried = 0;
-        assert_eq!(select_type(&t4, &mut tries, false, true), 4);
     }
 }
