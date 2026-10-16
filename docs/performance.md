@@ -535,6 +535,77 @@ noise (hard_10-03 +0.016 ± 0.078%, primal integral -0.196 ± 0.141%).
   instances, 4 seeds) 1.22, air05 1.25 over 6 seeds (5 slower; not the
   cmir or PRICE sums). Not a robust gain, so not kept.
 
+## Graph LNS on unit commitment models: deep search gate, pool move, crossover (2026-10-16)
+
+From the MIPFEAS study (MIPLIB 2017 unit commitment models; see
+[dispatch.md](./dispatch.md)): one thread keeps `uccase9` at its
+randomized-rounding incumbent (63% gap, optimum 10993) for 180 s, while
+two threads reach about 12-17k, because the helper runs the deep graph LNS
+search ungated. Cause: the quick search's root dive used its whole LP
+budget (the dive did not check it), so the quick search tried no
+neighbourhood, did not improve, and the deep search's gate ("quick search
+improved and gap within 3x the target") stayed shut; the root cut loop
+then takes the rest of the time.
+
+Options off by default. Method as above (`bench-dispatch`
+workflow: 25 dispatch models plus `miplib/*.mps.gz` = uccase9, unitcal_7,
+irish-electricity, buildingenergy; 16 seeds, `mip_rel_gap = 0.01`,
+180 s, paired on one runner; local MIPLIB checks with the instruction
+clock, R = 8).
+
+**`mip_graph_lns_deep_early`** (one thread; a helper does this anyway):
+the quick search's dives stop at its LP budget; if the quick search did
+not improve the incumbent and the gap is above 3x the target, the deep
+search runs before the root cuts on one root LP's worth of LP iterations
+(at least 5000), and again while a round closes 1% of the gap.
+
+| early against base, one thread, 16 seeds | x86_64 | arm64 |
+|---|---|---|
+| solved runs (of 464) | 389 -> 389 | 387 -> 387 |
+| time, geometric mean over solved models | 1.000 | 0.999 |
+| `dm_full_pert_s1_ramp` (the dive cap) | 0.982 [0.971, 0.994] | 0.978 [0.967, 0.989] |
+| `hard_10-03` gap at 180 s / mean primal gap | +0.003 +- 0.006 / -0.011 +- 0.046 | -0.005 +- 0.011 / -0.010 +- 0.020 |
+| `diverse_10-01` gap / mean primal gap | -0.001 +- 0.003 / -0.000 +- 0.022 | +0.001 +- 0.001 / +0.008 +- 0.019 |
+| uccase9 gap (base 41.0% / 47.5%) | -5.2 +- 8.6 | -6.3 +- 8.7 |
+| uccase9 mean primal gap | -6.1 +- 7.0 | -6.0 +- 6.9 |
+| irish-electricity, buildingenergy, unitcal_7 | even | even |
+
+On the dispatch models it fires on no seed (the quick search improves
+there); the changes there come from the dive cap, which only shortens
+dives (`dm_full_pert_s1_ramp` 2% faster). On uccase9 it fires on 2-3 of
+16 seeds, and those go from about 30000 to 13149-13303 (the optimum is
+10993); on the others the quick search improved the incumbent a little,
+so the gate stays shut and the run ends at 27000-32500 as before (or near
+11000 where the tree finds it). Two variants that also fire then were
+tried locally and rejected on MIPLIB (47 instances, seed 0, 120 s,
+instruction clock): firing whenever the gap is above 3x the target fires
+on 23 (rail507 and neos-957323 no longer solved, sp150x300d 6.1 times
+the instructions), and firing when the quick search closed under a tenth
+of the gap fires on 9 (sp150x300d 6.1, beasleyC3 1.72, mzzv11 1.44).
+
+MIPLIB (47 instances, seed 0, 120 s, instruction clock): it fires on 4;
+air05 and app1-1 solve with 1.13 and 1.41 the instructions, qap10 1.01,
+cvs16r128-89 ends at 29.35% instead of 27.96%. Local M1 on uccase9 (seed
+0-3): 29842 -> 11904-13375; thor50dday (seed 0): 59092 -> 57298.
+
+**Tried and rejected (code removed): a pool recombination move.** A
+fifth deep-search move in the style of ReXi crossover: free the decision
+columns where one of the last four incumbents disagrees with the current
+one (a random part if more than the move's size, grown by breadth-first
+search if fewer), fix the rest, search by branch and bound. Against base,
+16 seeds, x86_64 / arm64: one thread, solved 390 -> 389 / 387 -> 385,
+time 1.016 / 1.009, `diverse_10-01` solved 4 -> 2 / 3 -> 1, `hard_10-03`
+gap +0.009 +- 0.059 / +0.026 +- 0.058; two threads, time 1.002 / 1.005,
+uccase9 mean primal gap +1.3 / +1.0 points. The incumbents of a run differ
+in a few columns (each came from a neighbourhood of the last), so the move
+is mostly a BFS grown from recent changes, which the BFS moves already
+cover.
+
+**`mip_concurrent_crossover`** (existing, two threads): 1.116 (x86_64) and
+1.126 (arm64) of the time on the solved models (3c1b60d6 1.58 and 1.59,
+`dm_small_pert_s1_*` 1.45-1.57), gaps at the limit even, uccase9's mean
+primal gap +1.7 and +2.9 points. Stays off.
+
 ## Other platforms
 
 - **gcc / libstdc++.** With the `libstdcxx` and `no_fma` features, Crestline

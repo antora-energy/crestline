@@ -15,7 +15,7 @@ on:
       configs:
         description: "Configs, ';'-separated: NAME[@GIT_REF]: option=value ... (the first is the base)"
       instances:
-        description: "Instance globs under instances/, space-separated (all)"
+        description: "Instance globs under instances/, space-separated (all); miplib/*.mps.gz: the public MIPLIB UC models"
       seeds:
         description: "Seeds (0-15)"
       time_limit:
@@ -110,6 +110,14 @@ jobs:
           repository: asross/crestline-dispatch
           ssh-key: ${{ secrets.DISPATCH_DEPLOY_KEY }}
           path: dispatch
+      # public MIPLIB 2017 unit commitment and energy models (MIPFEAS):
+      # instance globs miplib/*.mps.gz
+      - if: contains(env.INSTANCES, 'miplib/')
+        run: |
+          mkdir -p dispatch/instances/miplib
+          for m in uccase9 unitcal_7 irish-electricity buildingenergy; do
+            curl -sfL --retry 3 -o dispatch/instances/miplib/$m.mps.gz https://miplib.zib.de/WebData/instances/$m.mps.gz
+          done
       - uses: actions/download-artifact@v4
         with:
           pattern: crest-${{ matrix.arch }}-*

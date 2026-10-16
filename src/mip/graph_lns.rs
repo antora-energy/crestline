@@ -96,6 +96,8 @@ struct GraphLns<'a> {
     have_base: bool,
     screened: i32,
     flip_max_iters: i64,
+    /// the dives' LP iteration budget (mip_graph_lns_deep_early; else none)
+    dive_cap: i64,
 }
 
 impl GraphLns<'_> {
@@ -143,7 +145,7 @@ impl GraphLns<'_> {
         // the last usable LP solution
         let mut sol = self.lp.col_value().to_vec();
         while solves < max_solves {
-            if self.w.terminated() || self.m.check_limits() {
+            if self.w.terminated() || self.m.check_limits() || self.lp_budget_exceeded(self.dive_cap) {
                 return false;
             }
             order.clear();
@@ -652,6 +654,19 @@ impl Heur {
         if !m.opts.graph_lns_cost_perturbation {
             lp.set_option(4);
         }
+        let iters_fac = if deep { 10.0 } else { 3.0 };
+        // (with the root LP counted at its estimated effort, see
+        // mip_root_lp_effort_from_basis)
+        let total_lp_iterations = m.total_lp_iterations() + m.root_lp_credit();
+        let mut heur_iters_cap = (iters_fac * total_lp_iterations as f64) as i64 + if deep { 5000 } else { 1000 };
+        // on large models, the quick search spends about one root LP's
+        // worth of LP iterations
+        if !deep {
+            heur_iters_cap = heur_iters_cap.min((total_lp_iterations + 1000).max(20000));
+        }
+        if max_lp_iters >= 0 {
+            heur_iters_cap = heur_iters_cap.min(max_lp_iters);
+        }
         let lp_iters_start = lp.num_lp_iterations();
         let gd = w.globaldom();
         let decisioncols = self.decisioncols.clone();
@@ -681,7 +696,11 @@ impl Heur {
             have_base: false,
             screened: 0,
             flip_max_iters: 5000i64.max(m.firstrootlpiters()),
+            dive_cap: i64::MAX,
         };
+        if m.opts.mip_graph_lns_deep_early {
+            s.dive_cap = heur_iters_cap;
+        }
         let who = if m.concurrent_helper { "LNS(helper)" } else { "LNS" };
         let log = &m.log;
         let st = s.solve(&dom);
@@ -721,20 +740,7 @@ impl Heur {
         let dfs_size0 = cmin(64.0, nd);
         let dfs_min_size = cmin(16.0, dfs_size0);
         let dfs_max_size = cmax(dfs_size0, cmin(1000.0, nd));
-        let iters_fac = if deep { 10.0 } else { 3.0 };
         let mut since = 0;
-        // (with the root LP counted at its estimated effort, see
-        // mip_root_lp_effort_from_basis)
-        let total_lp_iterations = m.total_lp_iterations() + m.root_lp_credit();
-        let mut heur_iters_cap = (iters_fac * total_lp_iterations as f64) as i64 + if deep { 5000 } else { 1000 };
-        // on large models, the quick search spends about one root LP's
-        // worth of LP iterations
-        if !deep {
-            heur_iters_cap = heur_iters_cap.min((total_lp_iterations + 1000).max(20000));
-        }
-        if max_lp_iters >= 0 {
-            heur_iters_cap = heur_iters_cap.min(max_lp_iters);
-        }
         for (t, mv) in s.h.lns_moves.iter_mut().enumerate() {
             if mv.size == 0.0 {
                 mv.size = if t == 3 { dive_size0 } else { dfs_size0 };

@@ -47,7 +47,8 @@ the columns that determine them.
 **Deep search** (after the root cuts, before the sub-MIP heuristics, only
 if the quick search improved the incumbent and brought it within three
 times the target gap of the bound; otherwise the model does not suit graph
-LNS and the usual root heuristics run). Neighbourhoods are smaller and are
+LNS and the usual root heuristics run; but see `mip_graph_lns_deep_early`
+below). Neighbourhoods are smaller and are
 searched by a depth-first branch and bound with a node limit (300 LP
 solves), their size adapting to what that limit exhausts. A UCB bandit
 picks, among four moves, the one closing the most gap per LP iteration:
@@ -95,6 +96,62 @@ non-deterministic:
   integer columns where they agree are fixed and the rest solved as a
   sub-MIP.
 
+## When the quick search never searched (`mip_graph_lns_deep_early`)
+
+The deep search's gate reads "the quick search did not improve" as "the
+model does not suit graph LNS". That holds only if the quick search tried
+neighbourhoods. On `uccase9` (MIPLIB 2017, unit commitment) its root dive
+from the LP point uses up the whole quick budget (the dive was not
+checked against it), so not one neighbourhood is tried, the gate stays
+shut, and one thread keeps the randomized-rounding incumbent (63% gap) for
+180 s while the root cut loop runs. With the option:
+- the quick search's dives stop at its LP iteration budget, like its
+  neighbourhoods;
+- if the quick search did not improve the incumbent and the gap is
+  above three times the target, the main solver runs the deep search
+  right away (before the root cuts) on one root LP's worth of LP
+  iterations (at least 5000), and again while a round closes 1% of the
+  gap. A helper thread, when there is one, runs the deep search anyway,
+  so the option does nothing there.
+
+Results (see [performance.md](./performance.md)): no change on the
+dispatch suite on either architecture (it does not fire there; the dive
+cap makes `dm_full_pert_s1_ramp` about 2% faster); on uccase9 it fires on
+2-3 of 16 seeds, which end near 13200 instead of near 30000; on 4 of 47
+MIPLIB instances it costs 1.01-1.41 times the instructions. So it stays
+off: the gain is real but narrow, and gates that fire on more uccase9
+seeds cost too much on general MIP.
+
+## MIPLIB unit commitment models
+
+`uccase9`, `unitcal_7`, `irish-electricity` and `buildingenergy` (MIPLIB
+2017, public; the `bench-dispatch` workflow downloads them for the
+instance glob `miplib/*.mps.gz`) are unit commitment and energy models
+with features the dispatch ticks lack. The MIPFEAS notes had crest find
+no solution in 180 s on the last two; that was the loaded M1. On the
+runners (one thread, 1%, 180 s, 16 seeds, median over seeds, x86_64 /
+arm64):
+
+| | first solution | gap at 180 s | two threads: gap |
+|---|---|---|---|
+| `unitcal_7` | 5.9 / 6.8 s | 0.27% (solved) | 0.28% / 0.30% |
+| `uccase9` | 9.0 / 8.9 s | 61% / 63% | 11.2% / 11.1% |
+| `irish-electricity` | 72 / 90 s | 3.39% | 2.94% / 2.95% |
+| `buildingenergy` | 134 / 149 s | 1.48% / 1.52% | 1.52% / 1.54% |
+
+- `uccase9`: see above (on two threads the helper's ungated deep search
+  does the work).
+- `irish-electricity`: graph LNS never starts: its root dive fails (a
+  rounding and its opposite both infeasible, after 7.4k LP iterations),
+  and randomized rounding and feasibility jump find nothing, so the first
+  solution comes from RENS after the root cut loop (about 16 rounds).
+  HiGHS 1.12 found its first the same way (57 s on a Core Ultra 9).
+- `buildingenergy`: the root LP is most of the time: 241k dual simplex
+  iterations (1155G instructions on the M1; HiGHS 1.15.1 takes 245k
+  iterations and 104 s on a Core Ultra 9). IPX is far worse here (9
+  interior point iterations in 2000G instructions, mostly its starting
+  basis), as is the primal simplex. No cheap fix.
+
 ## Cheaper LP re-solves
 
 Graph LNS and branch and bound solve many LPs of a few iterations each, so
@@ -132,6 +189,7 @@ integer column at a fractional value, which cannot give a violated cut
 | `mip_graph_lns_cost_perturbation` | false: graph LNS's LP solves without dual cost perturbation (true as in HiGHS; see [performance.md](./performance.md)) |
 | `mip_root_lp_ipx` | false (see [performance.md](./performance.md)) |
 | `mip_root_lp_effort_from_basis` | false (see [performance.md](./performance.md)) |
+| `mip_graph_lns_deep_early` | false (see above and [performance.md](./performance.md)) |
 | `simplex_dse_exact_init_max_rows` | no limit (20000 in the MIP's LP relaxation) |
 | `simplex_keep_random_vectors` | false (true in the MIP's LP relaxation) |
 | `full_lp_kkt_check` | true (false in the MIP's LP relaxation) |
@@ -199,3 +257,8 @@ counts.
   search paths and drops a safeguard.
 - RINS at the root after a stalled deep search; fix-and-optimize over time
   windows as a 180 s heuristic.
+- A pool recombination move for the deep search (ReXi-style crossover of
+  the last four incumbents): slightly slower, fewer solved
+  `diverse_10-01` runs (see [performance.md](./performance.md)).
+- `mip_concurrent_crossover` on two threads: 1.12x the time on the solved
+  dispatch models.
