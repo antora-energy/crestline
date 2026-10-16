@@ -107,37 +107,50 @@ shut, and one thread keeps the randomized-rounding incumbent (63% gap) for
 180 s while the root cut loop runs. With the option:
 - the quick search's dives stop at its LP iteration budget, like its
   neighbourhoods;
-- if the quick search then tried no neighbourhood and the gap is above
-  three times the target, the main solver runs the deep search right
-  away (before the root cuts) on one root LP's worth of LP iterations
-  (at least 5000), and again while a round closes 1% of the gap. A
-  helper thread, when there is one, runs the deep search anyway, so the
-  option does nothing there.
+- if the quick search did not improve the incumbent and the gap is
+  above three times the target, the main solver runs the deep search
+  right away (before the root cuts) on one root LP's worth of LP
+  iterations (at least 5000), and again while a round closes 1% of the
+  gap. A helper thread, when there is one, runs the deep search anyway,
+  so the option does nothing there.
 
-It changes nothing where the quick search tried a neighbourhood: on the
-dispatch ticks (no run of 400 fired it on the M1) and on all but three of
-47 MIPLIB instances.
+Results (see [performance.md](./performance.md)): no change on the
+dispatch suite on either architecture (it does not fire there; the dive
+cap makes `dm_full_pert_s1_ramp` about 2% faster); on uccase9 it fires on
+2-3 of 16 seeds, which end near 13200 instead of near 30000; on 4 of 47
+MIPLIB instances it costs 1.01-1.41 times the instructions. So it stays
+off: the gain is real but narrow, and gates that fire on more uccase9
+seeds cost too much on general MIP.
 
 ## MIPLIB unit commitment models
 
 `uccase9`, `unitcal_7`, `irish-electricity` and `buildingenergy` (MIPLIB
 2017, public; the `bench-dispatch` workflow downloads them for the
 instance glob `miplib/*.mps.gz`) are unit commitment and energy models
-with features the dispatch ticks lack. One thread, 1%, 180 s:
-- `unitcal_7`: reaches 1% (about 22 s on the M1).
-- `uccase9`: see above.
-- `irish-electricity`: no LNS: the graph-LNS dive fails (a rounding and
-  its opposite both infeasible after 7.4k LP iterations), randomized
-  rounding and feasibility jump find nothing; the first solution comes
-  from RENS after the root cut loop (about 16 rounds). On a quiet M1 that
-  is at about 115 s (3751505, 0.75% above the optimum); on a loaded
-  machine or a slower core it is after 180 s, which is the "no solution"
-  of the MIPFEAS notes. HiGHS 1.12 found it the same way at 57 s.
-- `buildingenergy`: the root LP alone is about the limit: 241k dual
-  simplex iterations (1155G instructions; HiGHS 1.15.1 takes 245k and
-  104 s on a Core Ultra 9). IPX is far worse here (9 interior point
-  iterations in 2000G instructions: its starting basis construction), as
-  is the primal simplex. No cheap fix.
+with features the dispatch ticks lack. The MIPFEAS notes had crest find
+no solution in 180 s on the last two; that was the loaded M1. On the
+runners (one thread, 1%, 180 s, 16 seeds, median over seeds, x86_64 /
+arm64):
+
+| | first solution | gap at 180 s | two threads: gap |
+|---|---|---|---|
+| `unitcal_7` | 5.9 / 6.8 s | 0.27% (solved) | 0.28% / 0.30% |
+| `uccase9` | 9.0 / 8.9 s | 61% / 63% | 11.2% / 11.1% |
+| `irish-electricity` | 72 / 90 s | 3.39% | 2.94% / 2.95% |
+| `buildingenergy` | 134 / 149 s | 1.48% / 1.52% | 1.52% / 1.54% |
+
+- `uccase9`: see above (on two threads the helper's ungated deep search
+  does the work).
+- `irish-electricity`: graph LNS never starts: its root dive fails (a
+  rounding and its opposite both infeasible, after 7.4k LP iterations),
+  and randomized rounding and feasibility jump find nothing, so the first
+  solution comes from RENS after the root cut loop (about 16 rounds).
+  HiGHS 1.12 found its first the same way (57 s on a Core Ultra 9).
+- `buildingenergy`: the root LP is most of the time: 241k dual simplex
+  iterations (1155G instructions on the M1; HiGHS 1.15.1 takes 245k
+  iterations and 104 s on a Core Ultra 9). IPX is far worse here (9
+  interior point iterations in 2000G instructions, mostly its starting
+  basis), as is the primal simplex. No cheap fix.
 
 ## Cheaper LP re-solves
 
