@@ -447,6 +447,33 @@ impl GfkSolve {
             }
         }
 
+        // the factor rows as sorted (column, value) lists: the solutions
+        // below only look entries up (the splay trees are rebuilt by the
+        // next fromCSC, so their shape no longer matters)
+        let mut row_start = Vec::with_capacity(num_factor_rows + 1);
+        let mut row_entries: Vec<(i32, u32)> = Vec::new();
+        row_start.push(0);
+        for i in 0..num_factor_rows {
+            let row = self.factor_row_perm[i] as usize;
+            let s = row_entries.len();
+            self.iterstack.push(self.rowroot[row]);
+            while let Some(rowpos) = self.iterstack.pop() {
+                if rowpos == -1 {
+                    continue;
+                }
+                let rp = rowpos as usize;
+                self.iterstack.push(self.arleft[rp]);
+                self.iterstack.push(self.arright[rp]);
+                row_entries.push((self.acol[rp], self.avalue[rp]));
+            }
+            row_entries[s..].sort_unstable_by_key(|e| e.0);
+            row_start.push(row_entries.len());
+        }
+        let find = |i: usize, col: i32| -> Option<u32> {
+            let list = &row_entries[row_start[i]..row_start[i + 1]];
+            list.binary_search_by_key(&col, |e| e.0).ok().map(|p| list[p].1)
+        };
+
         let mut basis_swap_pos = 0;
         loop {
             let mut performed_basis_swap = false;
@@ -456,15 +483,13 @@ impl GfkSolve {
                 let mut solval: u32 = 0;
                 for e in 0..solution.len() {
                     let SolutionEntry { index, weight } = solution[e];
-                    let pos = self.find_nonzero(row, index);
-                    if pos != -1 {
-                        solval = solval.wrapping_add(self.avalue[pos as usize].wrapping_mul(weight));
+                    if let Some(v) = find(i, index) {
+                        solval = solval.wrapping_add(v.wrapping_mul(weight));
                     }
                 }
                 solval = self.rhs[row].wrapping_add(k).wrapping_sub(solval % k);
                 let col = self.factor_col_perm[i];
-                let pos = self.find_nonzero(row, col);
-                let col_val_inverse = inverse(k, self.avalue[pos as usize]);
+                let col_val_inverse = inverse(k, find(i, col).unwrap());
                 solval = solval.wrapping_mul(col_val_inverse) % k;
                 if solval != 0 {
                     solution.push(SolutionEntry { index: col, weight: solval });
