@@ -43,32 +43,37 @@ pub fn decision_cols(
     intcols: &[i32],
 ) -> Vec<i32> {
     let mut implied = vec![false; integrality.len()];
+    // per row: all coefficients integral on integer columns (row_ok) and
+    // the number of implied columns in it, so that a column's test does
+    // not scan its rows (quadratic in the row length)
+    let num_row = g.ar_start.len().saturating_sub(1);
+    let row_ok: Vec<bool> = (0..num_row)
+        .map(|row| g.row(row).all(|q| integral(g.ar_value[q]) && integrality[g.ar_index[q] as usize] != 0))
+        .collect();
+    let mut row_implied = vec![0i32; num_row];
     let mut out = Vec::new();
     for &c in intcols {
         let col = c as usize;
         let mut ok = true;
-        'col: for p in g.col(col) {
-            if (g.a_value[p].abs() - 1.0).abs() > 1e-9 {
-                ok = false;
-                break;
-            }
+        for p in g.col(col) {
             let row = g.a_index[p] as usize;
-            if (row_lower[row] != f64::NEG_INFINITY && !integral(row_lower[row]))
+            if (g.a_value[p].abs() - 1.0).abs() > 1e-9
+                || (row_lower[row] != f64::NEG_INFINITY && !integral(row_lower[row]))
                 || (row_upper[row] != f64::INFINITY && !integral(row_upper[row]))
+                || !row_ok[row]
+                || row_implied[row] > implied[col] as i32
             {
                 ok = false;
                 break;
             }
-            for q in g.row(row) {
-                let k = g.ar_index[q] as usize;
-                if !integral(g.ar_value[q]) || integrality[k] == 0 || (k != col && implied[k]) {
-                    ok = false;
-                    break 'col;
-                }
-            }
         }
         if ok {
-            implied[col] = true;
+            if !implied[col] {
+                implied[col] = true;
+                for p in g.col(col) {
+                    row_implied[g.a_index[p] as usize] += 1;
+                }
+            }
         } else {
             out.push(c);
         }
