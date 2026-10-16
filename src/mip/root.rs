@@ -358,14 +358,13 @@ impl MipData {
                     let skip = sc.lns_quick_improved
                         && sc.upper_bound - sc.lower_bound <= 3.0 * (sc.upper_bound - sc.optimality_limit);
                     self.oi(op::SET_SKIP_ANALYTIC_CENTER, skip as i64);
-                    // mip_graph_lns_deep_early: if the quick search did not
-                    // improve the incumbent and the gap is still large, the
+                    // mip_graph_lns_deep_early: if the gap is still above
+                    // three times the target after the quick search, the
                     // deep search now (a helper thread runs it anyway), one
                     // root LP's worth of LP iterations, continued while it
                     // pays; the cut loop can take the rest of the time limit
                     let sc = self.sc();
                     if o.mip_graph_lns_deep_early
-                        && !sc.lns_quick_improved
                         && !self.submip
                         && self.own_lns().is_none()
                         && sc.upper_bound < INF
