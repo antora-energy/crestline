@@ -103,8 +103,6 @@ pub mod heur {
     /// the deep graph LNS search from the first LP solution, with an LP
     /// iteration budget (the op's value; negative: the usual one)
     pub const GRAPH_LNS_DEEP_FIRST: i64 = 13;
-    /// (returns the neighbourhoods the quick graph LNS search dived)
-    pub const GRAPH_LNS_QUICK_TRIED: i64 = 14;
 }
 
 /// The profiling clocks (indices of HighsPrimalHeuristics.cpp's
@@ -360,16 +358,14 @@ impl MipData {
                     let skip = sc.lns_quick_improved
                         && sc.upper_bound - sc.lower_bound <= 3.0 * (sc.upper_bound - sc.optimality_limit);
                     self.oi(op::SET_SKIP_ANALYTIC_CENTER, skip as i64);
-                    // mip_graph_lns_deep_early: if the quick search's root
-                    // dive used up its budget, so that it tried no
-                    // neighbourhood, and the gap is still large, the deep
-                    // search now (a helper thread runs it anyway), one root
-                    // LP's worth of LP iterations, continued while it pays;
-                    // the cut loop can take the rest of the time limit
-                    let quick_tried = self.op(op::HEUR, Some(w), heur::GRAPH_LNS_QUICK_TRIED, 0.0);
+                    // mip_graph_lns_deep_early: if the quick search did not
+                    // improve the incumbent and the gap is still large, the
+                    // deep search now (a helper thread runs it anyway), one
+                    // root LP's worth of LP iterations, continued while it
+                    // pays; the cut loop can take the rest of the time limit
                     let sc = self.sc();
                     if o.mip_graph_lns_deep_early
-                        && quick_tried == 0.0
+                        && !sc.lns_quick_improved
                         && !self.submip
                         && self.own_lns().is_none()
                         && sc.upper_bound < INF
