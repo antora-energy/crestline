@@ -606,6 +606,72 @@ cover.
 `dm_small_pert_s1_*` 1.45-1.57), gaps at the limit even, uccase9's mean
 primal gap +1.7 and +2.9 points. Stays off.
 
+## MIP infrastructure outside the simplex: pass of 2026-10-16
+
+**Profile** (macOS `sample` call trees and a SIGPROF PC sampler with the
+link register, line tables; single thread, MIPLIB set at 30 s each, plus
+dispatch ticks). Shares are of each instance's samples:
+
+- *Symmetry detection* (neos-4722843-widden: 65 s of a 120 s run, 39%
+  of the profile): partition refinement probed a hash table of vertex
+  hashes in every sort comparison (23%), and the leave graphs were hash
+  sets of edges (7%).
+- *Clique partition of the objective* (MIP setup; s100: 90% of a 100 s
+  run, the MIP never started): a hash query per pair of candidate
+  literals, 1.8e9 queries for 39 partitions of 10-20k literals.
+- *Mod-k separation*: the GFk solve's splay-tree lookups while
+  enumerating basic solutions (qap10 47%, cvs16r128-89 41%, cod105
+  24%, air04 29% of modk); c-MIR efficacy evaluations (air04 29% of
+  modk; not changed, see below).
+- *Graph LNS decision columns*: scanned every row of every integer
+  column, quadratic in the row length (rail507 9%).
+- *Presolve*: dominated columns re-traversed the same few long rows'
+  splay trees for every column (eilA101-2: 37% of a presolve that did not
+  finish in 60 s); strengthenInequalities re-sorted all indices after each
+  cover step (s100 10%); probing on co-100 is 76% of its 3.1T-instruction
+  presolve, mostly activity updates in `do_change_bound` (57%) after
+  clique implications.
+- *Domain propagation* on the dispatch ticks: 11% of the hard tick's
+  root, nearly all in graph LNS's flip-search screening, spread over the
+  activity update and row propagation loops (no single hot line).
+
+**Landed** (every change keeps the paths: quick_check, presolved models
+compared byte for byte on 68 instances, MIP logs at 100 nodes on 64
+MIPLIB and dispatch instances; instructions retired, M1, base = main):
+
+| Change | Effect |
+|---|---|
+| Symmetry: vertex hashes in a dense array, leave graphs as sorted per-cell edge lists, the sparse-hash monomial of each cell once | neos-4722843-widden (30 nodes) 0.729 with the rest; detection 65 s -> ~13 s |
+| Parallel rows/columns: the sparse-hash monomials once per index | small |
+| Clique partition: a literal's neighbours from its cliques' entries via literal positions when cheaper than a query per candidate; candidates inside one clique of the literal need no search; same neighbours and query count | s100 setup about 150 s -> 15 s (first solution 61 s -> 31 s with the next) |
+| GFk solve: basic solutions from sorted copies of the factor rows (the trees are rebuilt by the next fromCSC, so splaying them was wasted) | qap10 0.797, cvs16r128-89 0.794, neos-933966 0.857, air04 0.927 (100-200 nodes) |
+| Graph LNS decision columns in linear time (per-row integrality flag, count of implied columns) | rail507 (200 nodes) 0.845 |
+| Dominated columns: stored row positions cached per row with a matrix version | eilA101-2 presolve (no probing) 64 s -> 39 s |
+| strengthenInequalities: only the cover's and the slack's reduced costs re-sorted, merged into the rest (a strict total order, so the same order) | presolve s100 0.577 (with the next), neos-957323 0.858 |
+| CDouble two-product by one FMA where the CPU has it (arm64, x86-64-v3; Dekker's product elsewhere): both are the exact rounding error, so the same values | presolve 0.87-1.00, MIP 0.90-1.00 (ex9 0.897) |
+
+Totals against main (instructions, same paths): widden 0.729, rail507
+0.845, air04 0.927, qap10 0.797, neos-957323 0.933, cvs16r128-89 0.794,
+neos-933966 0.857, the hard dispatch tick's root 0.981; s100 presolve
+0.577; the dispatch models at 100 nodes 0.99-1.00 (they are LP-bound).
+
+**Tried and rejected:**
+- c-MIR efficacy (`cmir_efficacy`) with the norm update by a select
+  instead of the data-dependent branch: +5% instructions on air04, cycles
+  even. The sum is a sequential chain of fused multiply-adds, so it cannot
+  be split without changing results.
+- A 4-entry most-recent cache of stored rows in dominated columns: no
+  hits on eilA101-2 (columns alternate over all 100 rows); kept per row.
+
+**Not done (leads):** dominated columns still scan the whole stored row
+per column (eilA101-2: the rest of its presolve time is that scan and
+probing); probing's activity updates after clique implications (co-100);
+the flip search's screening refixes the open columns for every move
+(order-dependent, so path-changing); symmetry `compare_current_graph`
+(6% of widden) and partition refinement's `partition` (3%). Lead
+instances that are LP-bound (neos-2978193-inde: 77% in node LP solves)
+or have no symmetry found (fhnw-binpack4-48) are not helped by this pass.
+
 ## Other platforms
 
 - **gcc / libstdc++.** With the `libstdcxx` and `no_fma` features, Crestline
