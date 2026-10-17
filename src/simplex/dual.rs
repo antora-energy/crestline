@@ -1354,6 +1354,13 @@ impl<'a> Dual<'a> {
         let mut switch_to_devex = false;
         // Firstly consider switching on the basis of NLA cost
         let row_dse_density = *self.e.row_dse_density;
+        // Crestline: on the density of the DSE FTRAN alone. Where B^-1 is
+        // dense (equality chains of dispatch models), every solve is
+        // dense, so the relative test below does not fire, but the DSE
+        // FTRAN (on a dense row of B^-1) is the dearest of them
+        if x.allow_dual_steepest_edge_to_devex_switch && row_dse_density > x.dse_to_devex_density {
+            return true;
+        }
         let costly_dse_measure_denominator =
             std_max(std_max(*self.e.row_ep_density, *self.e.col_aq_density), *self.e.row_ap_density);
         if costly_dse_measure_denominator > 0.0 {
@@ -1403,18 +1410,18 @@ impl<'a> Dual<'a> {
             return;
         }
         // Zero the infeasibility of any taboo rows
-        {
+        let use_live = {
             // SAFETY: as for records()
             let records = unsafe { &mut *self.x.basis_records };
-            records.apply_taboo(&mut self.rhs.work_infeasibility, 0.0, 0);
-        }
+            records.apply_taboo(&mut self.rhs.work_infeasibility, 0.0, 0)
+        };
         let num_row = self.num_row as i32;
         loop {
             // Choose the index of a good row to leave the basis
             let mut random = HighsRandom::from_state(self.x.random.get());
             let e = &mut self.e;
             self.row_out =
-                self.rhs.choose_normal(e.dual_edge_weight, e.scattered_dual_edge_weight, &mut random, num_row);
+                self.rhs.choose_normal(e.dual_edge_weight, e.scattered_dual_edge_weight, &mut random, num_row, use_live);
             self.x.random.set(random.state());
             if self.row_out == NO_ROW_CHOSEN {
                 // No index found so may be dual optimal

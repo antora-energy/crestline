@@ -168,6 +168,116 @@ unsafe fn solve_hyper(h_size: usize, h: &Triangle, rhs: &mut HVec) {
     rhs.count = count as i32;
 }
 
+thread_local! {
+    /// solve_bitmap's bitmap of positions, all zero between solves
+    static BITMAP: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Sparse triangular solve in the order of the dense solve (positions
+/// increasing if `forward`, else decreasing), visiting only the positions
+/// reached from nonzeros: a bitmap of the positions to visit is scanned a
+/// word at a time. The results, their order in `rhs.index` included, are
+/// those of the dense solve bit for bit. solve_hyper's depth-first search
+/// also visits the positions reached only through values that cancel to
+/// zero (three in four on buildingenergy) and loads more per position.
+/// The synthetic tick counts as solve_hyper's.
+///
+/// # Safety
+/// As solve_hyper's, and each column's rows are at positions after its own
+/// in the order of the solve (the dense solve's condition)
+unsafe fn solve_bitmap(h_size: usize, h: &Triangle, rhs: &mut HVec, forward: bool) {
+    let npos = h.start.len().min(h.end.len()).min(h.pivot_index.len());
+    let (start, end, pivot_index) = (&h.start[..npos], &h.end[..npos], &h.pivot_index[..npos]);
+    let pivot_value = h.pivot_value.map(|p| &p[..npos]);
+    let lookup = &h.lookup[..h_size];
+    BITMAP.with(|b| {
+        let mut b = b.borrow_mut();
+        let num_word = npos.div_ceil(64);
+        if b.len() < num_word {
+            b.resize(num_word, 0);
+        }
+        let bits = &mut b[..num_word];
+        // The first word to scan (positions only move on in the scan)
+        let mut w = if forward { num_word } else { 0 };
+        for &row in &rhs.index[..rhs.count as usize] {
+            let p = lookup[row as usize] as usize;
+            bits[p >> 6] |= 1 << (p & 63);
+            w = if forward { w.min(p >> 6) } else { w.max(p >> 6) };
+        }
+        let array = &mut *rhs.array;
+        let mut count = 0;
+        let mut count_pivot = 0usize;
+        let mut count_entry = 0usize;
+        loop {
+            if w >= num_word {
+                break;
+            }
+            loop {
+                let word = bits[w];
+                if word == 0 {
+                    break;
+                }
+                let bit = if forward { word.trailing_zeros() } else { 63 - word.leading_zeros() };
+                bits[w] = word & !(1 << bit);
+                let i = (w << 6) | bit as usize;
+                let pivot_row = pivot_index[i];
+                if pivot_row == -1 {
+                    continue;
+                }
+                let (s, e) = (start[i], end[i]);
+                if i >= h_size {
+                    count_pivot += 1;
+                    count_entry += (e - s) as usize;
+                }
+                // SAFETY (pivot_row, the column's rows and range): HFactor
+                // invariant, see the function's safety condition
+                let x = array.get_unchecked_mut(pivot_row as usize);
+                let mut multiplier = *x;
+                if multiplier.abs() > K_HIGHS_TINY {
+                    if let Some(pivot_value) = pivot_value {
+                        multiplier /= pivot_value[i];
+                        *x = multiplier;
+                    }
+                    *rhs.index.get_unchecked_mut(count) = pivot_row;
+                    count += 1;
+                    let (idx, val) = entries(h.index, h.value, s, e);
+                    for (&j, &v) in idx.iter().zip(val) {
+                        let y = array.get_unchecked_mut(j as usize);
+                        *y = (-multiplier).mul_add_c(v, *y);
+                        let q = *lookup.get_unchecked(j as usize) as usize;
+                        *bits.get_unchecked_mut(q >> 6) |= 1 << (q & 63);
+                    }
+                } else {
+                    *x = 0.0;
+                }
+            }
+            if forward {
+                w += 1;
+            } else if w == 0 {
+                break;
+            } else {
+                w -= 1;
+            }
+        }
+        rhs.count = count as i32;
+        rhs.synthetic_tick += (count_pivot * 20 + count_entry * 10) as f64;
+    });
+}
+
+/// A hyper-sparse solve: by solve_bitmap, or with the `hyper_dfs` feature
+/// by HiGHS's depth-first search (solveHyper), whose results can differ
+/// from the dense solve's in the last bits (sums in another order)
+///
+/// # Safety
+/// As solve_bitmap's
+unsafe fn solve_sparse_rhs(h_size: usize, h: &Triangle, rhs: &mut HVec, forward: bool) {
+    if cfg!(feature = "hyper_dfs") {
+        solve_hyper(h_size, h, rhs)
+    } else {
+        solve_bitmap(h_size, h, rhs, forward)
+    }
+}
+
 /// Collect by X, scatter by Y (solveMatrixT, for MPF and APF)
 #[allow(clippy::too_many_arguments)]
 fn solve_matrix_t(
@@ -1844,7 +1954,7 @@ impl HFactor {
                 value: &self.l_value,
             };
             // SAFETY: h is part of this factor
-            unsafe { solve_hyper(self.num_row as usize, &h, rhs) };
+            unsafe { solve_sparse_rhs(self.num_row as usize, &h, rhs, true) };
         }
     }
 
@@ -1888,7 +1998,7 @@ impl HFactor {
                 value: &self.lr_value,
             };
             // SAFETY: h is part of this factor
-            unsafe { solve_hyper(self.num_row as usize, &h, rhs) };
+            unsafe { solve_sparse_rhs(self.num_row as usize, &h, rhs, false) };
         }
         if self.update_method == UPDATE_APF {
             self.btran_apf(rhs);
@@ -1984,7 +2094,7 @@ impl HFactor {
                 value: &self.u_value,
             };
             // SAFETY: h is part of this factor
-            unsafe { solve_hyper(self.num_row as usize, &h, rhs) };
+            unsafe { solve_sparse_rhs(self.num_row as usize, &h, rhs, false) };
         }
         if self.update_method == UPDATE_PF {
             self.ftran_pf(rhs);
@@ -2019,7 +2129,7 @@ impl HFactor {
                 value: &self.ur_value,
             };
             // SAFETY: h is part of this factor
-            unsafe { solve_hyper(self.num_row as usize, &h, rhs) };
+            unsafe { solve_sparse_rhs(self.num_row as usize, &h, rhs, true) };
         }
         // The update part
         if self.update_method == UPDATE_FT {

@@ -185,7 +185,7 @@ integer column at a fractional value, which cannot give a violated cut
 | `mip_heuristic_run_graph_lns` | true |
 | `mip_concurrent_helper` | true |
 | `mip_concurrent_crossover` | false |
-| `mip_root_lp_devex` | false (see [performance.md](./performance.md)) |
+| `mip_root_lp_devex_density` | 0.7: the first root LP switches from DSE to Devex once its DSE FTRAN results are this dense (inf: never; see [performance.md](./performance.md)) |
 | `mip_graph_lns_cost_perturbation` | false: graph LNS's LP solves without dual cost perturbation (true as in HiGHS; see [performance.md](./performance.md)) |
 | `mip_root_lp_ipx` | false (see [performance.md](./performance.md)) |
 | `mip_root_lp_effort_from_basis` | false (see [performance.md](./performance.md)) |

@@ -5,6 +5,10 @@ C++ HiGHS it was ported from, so on every case below both programs take the
 same path: the same simplex iterations, nodes, objective and status. The
 differences are in how fast each step runs.
 
+Since 2026-10-17 that holds for crest built with `--features hyper_dfs`
+and run with `mip_root_lp_devex_density = inf` (see the root LP section
+below); the default build takes other paths.
+
 ## Method
 
 `HIGHS_DIR=<HiGHS checkout> python3 bench/perf.py <C++ highs> <crest>
@@ -178,7 +182,7 @@ Tried and rejected on the dispatch models:
 - Concurrent FTRANs per dual iteration: not tried; on Lambda the second
   vCPU, when there is one, runs the LNS helper thread.
 
-### `mip_root_lp_devex` (off by default)
+### `mip_root_lp_devex` (off by default; replaced 2026-10-17 by `mip_root_lp_devex_density`, below)
 
 Devex pricing instead of dual steepest edge for the first root LP of the
 MIP (not sub-MIPs), when it has at least 20000 rows (the MIP's LPs get no
@@ -814,6 +818,144 @@ included, which HiPO uses too), and wins it only on the lambda and ramp
 models (see `mip_root_lp_ipx` above); one-thread solves never call it. So
 a faster IPM would move a fraction of the root LP on a few models, and
 HiPO is not faster on average.
+
+## Root LP: Devex switch, bitmap sparse solves, CHUZR (2026-10-17)
+
+### Where the root LP's time goes (M1, one thread, main)
+
+First root LP of the MIP, after presolve; time per phase by timers in
+`Dual::iterate`, samples by macOS `sample`.
+
+| Model | rows | iterations | per row | us / iteration | DSE FTRAN | FTRAN (col + BFRT) | CHUZR + BTRAN | PRICE + CHUZC | rebuild |
+|---|---|---|---|---|---|---|---|---|---|
+| full noramp (8 models) | 19.6-29.0k | 10.0-16.4k | 0.51-0.57 | 30-54 | 28-39% | 15-19% | 9-10% | 4% | 12-17% |
+| medium noramp (4) | 13.5-15.6k | 6.5-8.1k | 0.47-0.52 | 21-31 | 24-31% | 14-19% | 9% | 3-4% | 15-16% |
+| `hard_10-03` / `diverse_10-01` | 25.2k / 25.4k | 12.0k / 12.5k | 0.48 / 0.49 | 67 / 138 | 33% / 31% | 29% / 31% | 9% / 13% | 4% / 6% | 9% / 6% |
+| full ramp (3) | 26.1-29.0k | 21.3-28.7k | 0.73-1.10 | 195-281 | 29-34% | 11-13% | 15-18% | 13-14% | 6-7% |
+| medium ramp | 14.2k | 10.1k | 0.71 | 108 | 32% | 15% | 17% | 13% | 8% |
+| lambda ticks (3) | 23.4-23.6k | 14.5-18.3k | 0.62-0.78 | 145-221 | 26-34% | 19-25% | 16-21% | 10-17% | 6-8% |
+| small (5) | 5.2-6.1k | 3.3-6.3k | 0.55-1.19 | 23-72 | 25-27% | 17-22% | 10-20% | 5-11% | 10-14% |
+| buildingenergy | 268k | 228.5k | 0.85 | 565 | 2% (HiGHS's costly-DSE switch to Devex fires) | 53% | 22% | 4% | 12% |
+
+**Iterations or their cost?** Iterations per row vary 2x across the
+suite (0.47-1.19), the cost of an iteration 10x (21-281 us at similar
+sizes): the slow models are slow per iteration. On the ramp and lambda
+models B^-1 is dense (running densities: DSE FTRAN results 0.7-0.85 at
+their peak, BTRAN 0.2-0.26, PRICE 0.4), so every solve is a dense one, and
+the DSE FTRAN, on a dense row of B^-1, is the dearest (29-34%).
+buildingenergy is the other way round: sparse results (column 2%, row
+0.1%), but its hyper-sparse U solve visits 4 positions for each nonzero
+it finds (the others cancel to zero), 43% of its samples, and CHUZR's
+infeasibility list (45-58k rows, a third of them infeasible) 20%;
+factorizations (44 ms each, every ~1700 iterations) 12%. So the work was
+on cheaper iterations.
+
+### Landed
+
+| Change | Paths | Root LP effect (M1) |
+|---|---|---|
+| `mip_root_lp_devex_density` = 0.7: the first root LP (no basis, not a sub-MIP, at least 10000 rows; also the dual simplex of the two-thread race) switches from DSE to Devex once the running density of its DSE FTRAN results passes 0.7; later LPs start DSE from the weights it leaves (as after HiGHS's own costly-DSE switch) | changed where it fires: the ramp and lambda models of the suite (on MIPLIB, 33 of 47 instances at seed 0 without the row gate) | instructions to the end of the root LP: full ramp 0.49-0.60, lambda 0.52-0.70, medium ramp 0.73; the rest unchanged |
+| Hyper-sparse triangular solves (FTRAN/BTRAN, L and U) in the dense solve's order: the positions to visit are a bitmap, scanned a word at a time, set from the nonzeros as they are found; same results as the dense solve bit for bit (checked against a dense reference on every solve of several dispatch, MIPLIB and Netlib models). Cargo feature `hyper_dfs` keeps HiGHS's depth-first search, for the CI oracle | changed (sums in another order than HiGHS's DFS) | buildingenergy 128.4 s -> 89.3 s (U solve per call 91 -> 31 us); dispatch root LP time 0.92 geometric mean (0.74-1.14; iteration counts move by -16% to +14%) |
+| CHUZR visits only the slots (rows, or list positions) that may hold a primal infeasibility: a bitmap superset kept by the primal updates and the infeasibility list, cleared as the scan finds rows feasible, rebuilt when unsure (rebuild, dense column, taboo rows) | same (iteration counts identical on all 25 dispatch root LPs; asserted against the plain scan) | buildingenergy 72.3 s -> 69.8 s, 0.92 instructions; dispatch even |
+
+buildingenergy's root LP on the M1: 128.4 s (main) -> 69.8 s, 565 -> 277
+us per iteration (252k iterations instead of 229k: another path).
+
+### MIP: paired runs (`bench-dispatch`, 16 seeds, 180 s, `mip_rel_gap = 0.01`, 25 dispatch models + 4 MIPLIB UC models)
+
+Time: geometric mean of per-instance ratios over runs both solve; pg:
+mean primal gap over the limit (percentage points). Head = this branch;
+headinf = this branch with `mip_root_lp_devex_density = inf`. Runs
+38997056005 (one thread), 38997060596 (two threads), at threshold 0.7
+before the 10000-row gate (the gate only returns the five small models to
+their headinf behaviour, below).
+
+| one thread | x86_64 | arm64 |
+|---|---|---|
+| head / main, solved models | 0.914 | 0.884 |
+| solved runs (of 464) | 390 -> 390 | 387 -> 388 |
+| full ramp / lambda models | 0.74-0.91 / 0.62-0.84 | 0.75-0.91 / 0.68-0.84 |
+| full noramp models | 0.84-0.94 | 0.84-0.93 |
+| `hard_10-03` gap / pg | -0.009 +- 0.089 / -0.25 +- 0.15 | +0.007 +- 0.083 / -0.30 +- 0.12 |
+| `diverse_10-01` gap / pg | -0.05 +- 0.06 / -0.27 +- 0.16 | -0.06 +- 0.07 / -0.27 +- 0.17 |
+| buildingenergy gap / pg | -0.25 +- 0.17 / -22.1 +- 4.5 | -0.29 +- 0.19 / -23.2 +- 3.9 |
+| irish-electricity, uccase9 | even | even |
+| unitcal_7 (solved, 0.37% gap) | 1.37 [0.99, 1.89] (bitmap path; switch 1.00) | 1.35 [0.97, 1.86] |
+| switch alone (head / headinf), ramp + lambda | 0.75-1.02 | 0.80-1.04 |
+| switch alone, small models (before the gate) | 0.91-1.22 (windlull 1.22 [0.93, 1.60]) | 0.90-1.22 |
+
+| two threads | x86_64 | arm64 |
+|---|---|---|
+| head / main, solved models | 0.931 | 0.931 |
+| solved runs | 393 -> 393 | 396 -> 396 |
+| switch alone (head / headinf) | 1.007 | 1.004 |
+| buildingenergy gap / pg | -0.30 +- 0.19 / -26.2 +- 4.6 | -0.43 +- 0.19 / -25.3 +- 4.6 |
+| unitcal_7 | 0.875 [0.82, 0.93] | 0.796 [0.65, 0.97] |
+| worst model | `diverse_10-01` 0.96 (8 solved) | `diverse_10-01` 1.31 [0.88, 1.96] (12 solved) |
+
+buildingenergy: the root LP ends 40-60 s earlier on the runners, so its
+first incumbent comes earlier (mean primal gap down by 22-26 points) and
+the gap at 180 s is 0.25-0.43 points lower.
+
+MIPLIB sanity (47 instances, seed 0, 120 s, instruction clock R = 8, M1):
+head (switch at 0.3) against main, 0.988 geometric mean over the 19
+solved by both, solved 20 -> 21; the switch at 0.7 (no row gate) against
+off: 0.976, solved 21 -> 22 (ns1208400 lost, cod105 and neos-933966
+gained). perf.py (main -> head, M1 cycles): LP dual simplex 0.972, primal
+0.933, IPX 0.992, MIP 0.952, all 0.971; dispatch 3c1b60d6 relaxation
+0.666.
+
+### Confirmation on the final head (10000-row gate), and diverse_10-01
+
+16 seeds, all 29 models, head against main: one thread 0.915 (x86_64) and
+0.882 (arm64), solved 387 -> 387 and 387 -> 388, dm_small_windlull 0.99 /
+0.97 (the gate); two threads 0.939 and 0.929, solved 396 -> 395 and 398 ->
+395. The two-thread drop is diverse_10-01 (12 -> 10, 14 -> 11 solved at 16
+seeds), so it was rerun at 32 seeds with the parts separated: A = main,
+B = the switch alone (HiGHS's DFS order, `hyper_dfs`), C = the dense-order
+solves alone (`mip_root_lp_devex_density = inf`), D = both (the default).
+
+| 32 seeds | | diverse solved | diverse gap (B-A) | diverse pg | hard_10-03 pg |
+|---|---|---|---|---|---|
+| one thread, x86_64 | B / C / D | 7 / 8 / 9 (A: 7) | +0.00 / -0.05 / -0.06 +- 0.05 | -0.03 / -0.28 / -0.28 | -0.01 / -0.34 / -0.33 |
+| one thread, arm64 | B / C / D | 4 / 7 / 8 (A: 4) | -0.00 / -0.05 / -0.06 +- 0.05 | +0.02 / -0.24 / -0.23 | -0.03 / -0.38 / -0.35 |
+| two threads, x86_64 | B / C / D | 21 / 20 / 20 (A: 19) | -0.01 / +0.01 / +0.01 +- 0.02 | +0.00 / -0.04 / -0.04 | -0.01 / -0.35 / -0.35 |
+| two threads, arm64 | B / C / D | 24 / 26 / 24 (A: 18) | -0.00 / -0.01 / +0.01 +- 0.02 | +0.02 / -0.09 / -0.10 | +0.04 / -0.35 / -0.35 |
+
+So the 16-seed drop was path luck; the dense-order solves are what improve
+the two hard ticks (their LNS LPs), the switch does not fire on them.
+Cost per hyper-sparse solve on diverse (1 thread, 60 s, instruction
+clock): bitmap 0.34 / 3.6 / 26 us against DFS 0.40 / 4.6 / 40 us for
+results of under 16 / under 256 / more nonzeros, so the O(rows/64) scan of
+the bitmap does not cost on its many tiny solves. unitcal_7 (MIPLIB) one
+thread 1.35-1.39 [0.98, 1.92] (solve order; B&B path), two threads 0.79-0.81.
+
+### Tried and rejected
+
+- Switching at density 0.3: fired on 19 of 25 dispatch models, including
+  every full noramp model, `hard_10-03`, `diverse_10-01`, irish-electricity
+  and uccase9 (late in the solve, where DSE costs little): one thread,
+  switch alone, `dm_full_pert_s2_noramp` 1.15-1.17 [1.03, 1.33],
+  `dm_small_windlull` 1.39-1.40, irish-electricity primal gap +9.5-10.3
+  points, uccase9 gap +21 +- 14 (arm64), `diverse_10-01` solved 4 -> 1.
+  The density at which each model first passes 0.2-0.6 put 0.7 between
+  the noramp models (peak 0.18-0.48) and the ramp and lambda models
+  (0.73-0.85).
+- Devex from the start of the root LP (`mip_root_lp_devex`, removed):
+  root LP instructions 0.42-1.10 (`hard_10-03` 1.10); after it the cut
+  loop's near-optimal re-solves run Devex too (no DSE weights). The switch
+  keeps DSE where it is cheap and leaves weights for the later solves.
+- Packing U's start, end, pivot index and pivot value into one record per
+  position for the depth-first search (a shadow copy, rebuilt on change):
+  slower; the bitmap solve removes the visits instead.
+- Refactorizing more often to keep the FT-updated U small (buildingenergy:
+  U solve 52 us just after a refactorization, 100-170 us after 1200-2000
+  updates): a factorization costs 44 ms, more than the solves save.
+- Not tried: a faster factorization kernel (12% on buildingenergy), a
+  second thread for PRICE or concurrent FTRANs (on two threads the second
+  core races IPX on this LP and then runs the LNS helper), crash bases and
+  dispatch-specific presolve (the slow models are slow per iteration, not
+  by iteration count).
 
 ## Other platforms
 

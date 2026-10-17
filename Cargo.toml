@@ -26,6 +26,9 @@ libstdcxx = []
 # Never fuse multiply-adds, like a C++ build without FMA instructions or
 # with -ffp-contract=off (default on x86_64)
 no_fma = []
+# Hyper-sparse triangular solves by HiGHS's depth-first search (as the C++)
+# rather than in the dense solve's order (the same results as a dense solve)
+hyper_dfs = []
 # The Rust Highs object, its model file reading (gzip) and the crest binary
 crest = ["dep:flate2"]
 

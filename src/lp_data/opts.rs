@@ -367,6 +367,7 @@ impl Opts {
             dual_simplex_cost_perturbation_multiplier: self.dual_simplex_cost_perturbation_multiplier,
             primal_simplex_bound_perturbation_multiplier: self.primal_simplex_bound_perturbation_multiplier,
             dual_steepest_edge_weight_log_error_threshold: self.dual_steepest_edge_weight_log_error_threshold,
+            simplex_dse_to_devex_density: self.simplex_dse_to_devex_density,
             cost_scale_factor: self.cost_scale_factor,
             log_dev_level: self.log_dev_level,
             dev_level: if self.output_flag { self.log_dev_level } else { 0 },
@@ -588,7 +589,7 @@ options! {
     mip_heuristic_run_graph_lns: bool = true;
     mip_concurrent_helper: bool = true;
     mip_concurrent_crossover: bool = false;
-    mip_root_lp_devex: bool = false;
+    mip_root_lp_devex_density: double = 0.7;
     mip_graph_lns_cost_perturbation: bool = false;
     mip_root_lp_ipx: bool = false;
     mip_root_lp_effort_from_basis: bool = false;
@@ -651,6 +652,7 @@ options! {
     rebuild_refactor_solution_error_tolerance: double = 1e-08;
     dual_steepest_edge_weight_error_tolerance: double = INF;
     dual_steepest_edge_weight_log_error_threshold: double = 10.0;
+    simplex_dse_to_devex_density: double = INF;
     dual_simplex_cost_perturbation_multiplier: double = 1.0;
     primal_simplex_bound_perturbation_multiplier: double = 1.0;
     dual_simplex_pivot_growth_tolerance: double = 1e-09;
@@ -761,7 +763,7 @@ mod tests {
     #[test]
     fn names_set_and_get() {
         let mut o = Opts::default();
-        assert_eq!(NAMES.len(), 166);
+        assert_eq!(NAMES.len(), 167);
         assert!(o.set("presolve", OptValue::Str(b"off")));
         assert_eq!(o.presolve, b"off");
         assert!(o.set("time_limit", OptValue::Int(3)));
