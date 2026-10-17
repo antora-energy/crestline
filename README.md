@@ -1,6 +1,6 @@
 # Crestline
 
-This MIP solver is based heavily on [HiGHS](https://github.com/ERGO-Code/HiGHS) but ported to Rust and augmented with [graph-based Large Neighborhood Search](./docs/dispatch.md). It also includes a number of additional optimizations discussed [here](./docs/performance.md). 
+This MIP solver is based heavily on [HiGHS](https://github.com/ERGO-Code/HiGHS) but ported to Rust and augmented with [graph-based Large Neighborhood Search](./docs/dispatch.md). It also includes a number of additional optimizations discussed [here](./docs/performance.md); standard benchmarks against HiGHS and SCIP are in [docs/benchmarks.md](./docs/benchmarks.md).
 
 As of this writing, it was programmed entirely by Claude Opus 5.5 with minimal guidance from me (@asross). My motivations in requesting it were:
 

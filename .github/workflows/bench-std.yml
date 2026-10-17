@@ -1,0 +1,154 @@
+# Standard benchmarks (docs/benchmarks.md): crest against the latest HiGHS
+# release, SCIP (pyscipopt) and CBC (Ubuntu's coinor-cbc) on MIPLIB 2017
+# benchmark, MIPFEAS and LP sets, downloaded at run time (actions/cache).
+# Run by hand (workflow_dispatch), or by pushing a branch bench-std-run/* whose
+# commit sets the defaults in `env`. Instances are sharded over runners; on
+# each runner every instance runs all solvers back to back. Results: the
+# std-results artifact (JSONL) and the run summary (bench/std.py report).
+name: bench-std
+on:
+  push:
+    branches: ['bench-std-run/**']
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "miplib (240), miplib-easy (66), mipfeas (233) or lp (miplib)"
+      solvers:
+        description: "Comma-separated: crest, highs, scip, cbc (crest,highs,scip)"
+      time_limit:
+        description: "Time limit, s (300)"
+      threads:
+        description: "Threads (1)"
+      archs:
+        description: "x64, arm64 or both, comma-separated (x64,arm64)"
+      shards:
+        description: "Runners per architecture (32)"
+      crest_ref:
+        description: "crest git ref (this commit)"
+      select:
+        description: "Instance name globs, space-separated (all of the suite)"
+      options:
+        description: "HiGHS options for crest and highs, space-separated k=v, e.g. solver=ipm (none)"
+
+env:
+  SUITE: "${{ inputs.suite || 'miplib' }}"
+  SOLVERS: "${{ inputs.solvers || 'crest,highs,scip' }}"
+  TIME_LIMIT: "${{ inputs.time_limit || '300' }}"
+  THREADS: "${{ inputs.threads || '1' }}"
+  ARCHS: "${{ inputs.archs || 'x64,arm64' }}"
+  SHARDS: "${{ inputs.shards || '32' }}"
+  CREST_REF: "${{ inputs.crest_ref || github.sha }}"
+  SELECT: "${{ inputs.select || '' }}"
+  OPTIONS: "${{ inputs.options || '' }}"
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      archs: ${{ steps.p.outputs.archs }}
+      runs: ${{ steps.p.outputs.runs }}
+      highs: ${{ steps.p.outputs.highs }}
+    steps:
+      - id: p
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json, os
+          runner = {'x64': 'ubuntu-24.04', 'arm64': 'ubuntu-24.04-arm'}
+          archs = [a.strip() for a in os.environ['ARCHS'].split(',') if a.strip()]
+          print('archs=' + json.dumps([dict(arch=a, runner=runner[a]) for a in archs]))
+          print('runs=' + json.dumps([dict(arch=a, runner=runner[a], shard=k) for a in archs for k in range(int(os.environ['SHARDS']))]))
+          EOF
+          echo "highs=$(gh release view -R ERGO-Code/HiGHS --json tagName -q .tagName)" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    strategy:
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.archs) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.CREST_REF }}
+      - uses: dtolnay/rust-toolchain@stable
+      # x64: x86-64-v3 as on AWS Lambda (README); arm64: the default target
+      - run: |
+          if [ "${{ matrix.arch }}" = x64 ]; then
+            export RUSTFLAGS="-C llvm-args=-unroll-runtime=false -C target-cpu=x86-64-v3"
+          fi
+          cargo build --release --bin crest
+          mkdir -p out && cp target/release/crest out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crest-${{ matrix.arch }}
+          path: out
+
+  run:
+    needs: [plan, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.runs) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: crest-${{ matrix.arch }}
+          path: bins
+      - name: Solvers
+        env:
+          TAG: ${{ needs.plan.outputs.highs }}
+        run: |
+          chmod +x bins/crest
+          a=$([ "${{ matrix.arch }}" = x64 ] && echo x86_64 || echo aarch64)
+          mkdir highs && curl -sfL --retry 3 "https://github.com/ERGO-Code/HiGHS/releases/download/$TAG/highs-${TAG#v}-$a-linux-gnu-static-mit.tar.gz" | tar xz -C highs
+          case ",$SOLVERS," in *,scip,*) pip install -q pyscipopt;; esac
+          case ",$SOLVERS," in *,cbc,*) sudo apt-get install -qq -y coinor-cbc;; esac
+      - id: key
+        run: echo "key=std-inst-${SUITE}-$(echo "$SELECT" | md5sum | cut -c1-8)-${{ matrix.shard }}of${SHARDS}" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: inst
+          key: ${{ steps.key.outputs.key }}
+      - env:
+          SHARD: ${{ matrix.shard }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -f  # SELECT holds globs
+          s=; for x in ${SOLVERS//,/ }; do
+            case $x in crest) s+=crest=bins/crest,;; highs) s+=highs=highs/bin/highs,;; *) s+=$x,;; esac
+          done
+          python3 bench/std.py run results-$ARCH-$SHARD.jsonl --suite "$SUITE" --solvers "$s" --tl "$TIME_LIMIT" \
+            --threads "$THREADS" --shard "$SHARD/$SHARDS" ${SELECT:+--select $SELECT} ${OPTIONS:+--opts $OPTIONS}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ matrix.arch }}-${{ matrix.shard }}
+          path: results-*.jsonl
+
+  report:
+    needs: [plan, run]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: res
+          merge-multiple: true
+      - run: |
+          cat res/*.jsonl > std-results.jsonl
+          python3 bench/std.py report std-results.jsonl | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: std-results
+          path: std-results.jsonl
