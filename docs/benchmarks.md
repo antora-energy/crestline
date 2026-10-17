@@ -44,7 +44,7 @@ and highs only, e.g. `solver=ipm` (IPX in both).
 - **correctness**: every MIP result is checked against
   `miplib2017-v31.solu`. A status of infeasible on a feasible instance (or
   a solution of an infeasible one), a dual bound beyond the known objective,
-  a primal value better than the optimum (tolerance 1e-6 relative), or
+  a primal value better than the optimum (tolerances 1e-6 relative on bounds, 1e-5 on the primal value), or
   "optimal" at a value off by more than the gap is WRONG, listed first in the
   report with crashes (a signal) and kills (past 1.5x the limit + 60 s). LP
   objectives of two solvers both optimal must agree to 1e-6 relative.
