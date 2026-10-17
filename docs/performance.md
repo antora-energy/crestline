@@ -683,6 +683,28 @@ the flip search's screening refixes the open columns for every move
 instances that are LP-bound (neos-2978193-inde: 77% in node LP solves)
 or have no symmetry found (fhnw-binpack4-48) are not helped by this pass.
 
+### Follow-up (2026-10-17)
+
+- **Dominated columns, landed (same paths):** the row cache also keeps
+  each entry's column, value, integrality and signature, so the scan of
+  a long row reads them in sequence (valid while neither the matrix nor
+  rowpositions changes; a nested reduction switches to live reads).
+  1.3e9 entries are scanned on eilA101-2, half of them reach the
+  signature test and 0.04% pass it: the scan is gather-bound. eilA101-2
+  presolve without probing 18.8 s -> 7.9 s (instructions 1.05);
+  presolved models identical on 71 instances.
+- **Probing on co-100, rejected:** the activity update's bound difference
+  times the coefficient by a two-product alone when the difference is
+  exact (it nearly always is; bit-identical, unit-tested): co-100 presolve
+  1.022 of the instructions, 0.964 of the cycles (runs side by side, so
+  within noise). Two-sums and the double-double comparisons of the
+  activity update are the rest of that time.
+- **fhnw-binpack4-48:** not a symmetry-detection cost. Its model is a
+  2D placement with big-M disjunctions over items of different sizes, so
+  the colour refinement leaves no cell of two or more columns and
+  detection stops before searching (no log line). Proving infeasibility
+  as SCIP does would need another technique, not a faster detection.
+
 ## Other platforms
 
 - **gcc / libstdc++.** With the `libstdcxx` and `no_fma` features, Crestline
