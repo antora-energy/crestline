@@ -367,6 +367,12 @@ struct PartitionPos {
     pos: Vec<i32>,
     mark: Vec<u32>,
     stamp: u32,
+    mark2: Vec<u32>,
+    stamp2: u32,
+    /// the candidates of the next call, (start, end), when they all lie in
+    /// one clique with the literal before them: then they are all its
+    /// neighbours, and so on until the partition ends
+    anchored: Option<(usize, usize)>,
 }
 
 impl CliqueTable {
@@ -854,7 +860,7 @@ impl CliqueTable {
             }
             pos[v.index()] = i as i32;
         }
-        Some(PartitionPos { pos, mark: vec![0; clq_vars.len()], stamp: 0 })
+        Some(PartitionPos { pos, mark: vec![0; clq_vars.len()], stamp: 0, mark2: vec![0; clq_vars.len()], stamp2: 0, anchored: None })
     }
 
     /// partitionNeighbourhood(v, clq_vars[s..e]) counting in the table's
@@ -868,13 +874,21 @@ impl CliqueTable {
             return self.partition_own(inds, v, &mut clq_vars[s..e]);
         };
         inds.clear();
+        let in_range = |p: i32| p >= s as i32 && p < e as i32;
+        if pp.anchored == Some((s, e)) {
+            // v and the candidates lie in one clique
+            inds.extend(0..(e - s) as i32);
+            self.num_neighbourhood_queries += (e - s) as i64 - in_range(pp.pos[v.complement().index()]) as i64;
+            pp.anchored = if e - s > 1 { Some((s + 1, e)) } else { None };
+            return inds.len();
+        }
+        pp.anchored = None;
         if self.num_cliques(v) == 0 {
             return 0;
         }
         // entries of v's cliques (numcliquesvar counts the size-two ones too)
         let mut work = 2 * self.num_cliques(v).max(0) as usize;
         self.inv[v.index()].for_each(|&id, _| work += self.cliques[id as usize].len() as usize);
-        let in_range = |p: i32| p >= s as i32 && p < e as i32;
         if work < CLIQUE_PARTITION_WORK_RATIO * (e - s) {
             pp.stamp = pp.stamp.wrapping_add(1);
             if pp.stamp == 0 {
@@ -882,18 +896,38 @@ impl CliqueTable {
                 pp.stamp = 1;
             }
             let (pos, mark, stamp) = (&pp.pos, &mut pp.mark, pp.stamp);
+            let (mark2, stamp2) = (&mut pp.mark2, &mut pp.stamp2);
+            // the most candidates found in one clique
+            let mut max_in_one = 0usize;
             let mut add = |id: i32| {
                 let c = self.cliques[id as usize];
+                *stamp2 = stamp2.wrapping_add(1);
+                if *stamp2 == 0 {
+                    mark2.fill(0);
+                    *stamp2 = 1;
+                }
+                let mut in_this = 0usize;
                 for &w in &self.entries[c.start as usize..c.end as usize] {
                     let p = pos[w.index()];
-                    if in_range(p) && mark[p as usize] != stamp && w.col() != v.col() {
-                        mark[p as usize] = stamp;
-                        inds.push(p - s as i32);
+                    if in_range(p) && w.col() != v.col() {
+                        if mark2[p as usize] != *stamp2 {
+                            mark2[p as usize] = *stamp2;
+                            in_this += 1;
+                        }
+                        if mark[p as usize] != stamp {
+                            mark[p as usize] = stamp;
+                            inds.push(p - s as i32);
+                        }
                     }
                 }
+                max_in_one = max_in_one.max(in_this);
             };
             self.inv2[v.index()].for_each(|&id, _| add(id));
             self.inv[v.index()].for_each(|&id, _| add(id));
+            if max_in_one == inds.len() && inds.len() > 1 {
+                // the neighbours lie in one clique (with v)
+                pp.anchored = Some((s + 1, s + inds.len()));
+            }
             if 8 * inds.len() > e - s {
                 inds.clear();
                 inds.extend((s..e).filter(|&p| mark[p] == stamp).map(|p| (p - s) as i32));
