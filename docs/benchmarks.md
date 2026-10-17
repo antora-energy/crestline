@@ -11,7 +11,7 @@ runners (x86_64 and arm64), to track Crestline against existing solvers.
 | `miplib` | 240 | the [MIPLIB 2017](https://miplib.zib.de) benchmark set |
 | `miplib-easy` | 66 | those HiGHS 1.15.1 solves in under 60 s in the MIPFEAS logs (i9-285K) |
 | `mipfeas` | 233 | MIPFEAS: the benchmark set less its 7 infeasible instances |
-| `lp` | 250 | LP relaxations of the benchmark set (`solve_relaxation`), and 10 models of [Mittelmann's LP test set](https://plato.asu.edu/ftp/lptestset/) that are not MIPLIB relaxations |
+| `lp` | 249 | LP relaxations of the benchmark set (`solve_relaxation`), and 9 models of [Mittelmann's LP test set](https://plato.asu.edu/ftp/lptestset/) that are not MIPLIB relaxations |
 
 Instances are downloaded at run time (miplib.zib.de, plato.asu.edu) and
 kept in `actions/cache`; none are committed.
@@ -69,4 +69,61 @@ Locally:
     python3 bench/std.py report out.jsonl
 
 ## Baseline
-_Running; tables to follow._
+
+2026-10-16, crest `bench-std` (main 48f6190 + this harness), HiGHS 1.15.1
+release, SCIP 10.0 (pyscipopt 6.3); 1 thread, 300 s; GitHub runners:
+arm64 Neoverse-N2, x64 a mix of AMD EPYC 7763/9V45/9V74 and Intel Xeon
+8370C/6973P (all solvers of an instance on the same one). Runs
+38939685629 (MIPLIB, 32 shards per arch), 38939643071 (LP, 16) and
+38939646677 (LP with `solver=ipm`, 16).
+
+**MIPLIB 2017 benchmark** (240 instances; primal integral over the 233
+with a known objective, i.e. MIPFEAS at 300 s)
+
+| arch | solver | solved | wrong | killed | sgm time (s, shift 10) | sgm primal integral | with a solution |
+|---|---|---|---|---|---|---|---|
+| x64 | crest | **93** | 0 | 0 | **141.8** | **0.0879** | 211 |
+| x64 | HiGHS 1.15.1 | 87 | 0 | 2 | 150.6 | 0.1035 | 203 |
+| x64 | SCIP 10.0 | 74 | 0 | 0 | 164.3 | 0.1461 | 197 |
+| arm64 | crest | **92** | 0 | 0 | **144.3** | **0.0920** | 208 |
+| arm64 | HiGHS 1.15.1 | 82 | 0 | 2 | 151.2 | 0.1059 | 204 |
+| arm64 | SCIP 10.0 | 73 | 0 | 1 | 167.0 | 0.1522 | 196 |
+
+No wrong answer and no crash for crest. HiGHS 1.15.1 overran the limit
+past the kill (510 s) on germanrr and neos-5114902-kasavu (both arches),
+SCIP on satellites2-40 (arm64). SCIP's incumbent on mas74 is 7e-6 below the
+optimum (feasibility tolerance; the check allows 1e-5).
+
+On instances both solve, crest takes 0.875 (x64) / 0.894 (arm64) of HiGHS
+1.15.1's shifted time and 0.77 of SCIP's. Where crest is weakest:
+
+- against HiGHS 1.15.1: neos-2978193-inde (3-4x, both arches), decomp2
+  (1.7-3.6x), neos-873061 (unsolved; HiGHS 133-155 s), neos-950242 (1.3-1.45x),
+  and on arm64 only gmu-35-50 and neos-933966 (unsolved; HiGHS 16 s and 33 s);
+- against SCIP: neos-787933 and graph20-20-1rand (SCIP 2-6 s, crest
+  unsolved), fhnw-binpack4-4 (infeasible; SCIP proves it in 12-17 s),
+  CMS750_4, istanbul-no-cutoff, rocI-4-11, fast0507 (unsolved), decomp2,
+  piperout-27, cod105, pk1, enlight_hard (2-4x); neos-3004026-krka has no
+  crest solution for most of the limit (primal integral 1.3-2.0 vs 0.3-0.45).
+
+**LP** (MIPLIB benchmark relaxations + 10 Mittelmann LPs; L1_sixm250obs, a
+fixed-format file neither reads, has since been dropped)
+
+| arch | method | solver | solved | sgm time (s, shift 1) | crest/HiGHS on both solved |
+|---|---|---|---|---|---|
+| x64 | default (dual simplex) | crest | **231** | **2.91** | 0.926 |
+| x64 | default (dual simplex) | HiGHS 1.15.1 | 228 | 3.22 | |
+| x64 | `solver=ipm` (IPX) | crest | 241 | 3.26 | 1.062 |
+| x64 | `solver=ipm` (IPX) | HiGHS 1.15.1 | **243** | **2.98** | |
+| arm64 | default (dual simplex) | crest | 231 | **2.89** | 0.920 |
+| arm64 | default (dual simplex) | HiGHS 1.15.1 | 231 | 3.22 | |
+| arm64 | `solver=ipm` (IPX) | crest | 241 | 3.24 | 1.015 |
+| arm64 | `solver=ipm` (IPX) | HiGHS 1.15.1 | **242** | **3.14** | |
+
+IPX is where crest trails the release: on irish-electricity's relaxation
+crest ends "Unknown" (imprecise crossover, simplex clean-up; so does the
+C++ app of the pinned fork, while 1.15.1 ends "Optimal"), and
+neos-631710 (4.9x on x64), neos-5049753-cuanza, neos-4763324-toguru (2x),
+neos-4532248-waihi, chromaticindex512-7 (1.6x) are slower. Simplex: slowest
+are physiciansched3-3 and ns1760995 relaxations (time limit vs 250-260 s on
+arm64) and cod105 (1.1-1.4x).

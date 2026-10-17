@@ -39,7 +39,7 @@ EASY = ('air05 app1-1 beasleyC3 binkar10_1 dano3_3 decomp2 drayage-100-23 drayag
 # Mittelmann LP test set models that are not MIPLIB relaxations, HiGHS <= ~120 s in his LPfeas runs
 # (top level only: the subdirectories hold emps-compressed files)
 MITTELMANN = ('datt256_lp.mps graph40-40.mps qap15.mps woodlands09.mps scpm1.mps neos-3025225.mps neos-5251015.mps '
-              'rmine15.mps Primal2_1000.mps L1_sixm250obs').split()
+              'rmine15.mps Primal2_1000.mps').split()  # L1_sixm250obs: fixed-format MPS, HiGHS cannot read it
 # HiGHS's LOGLINE (bench/dispatch.py): BestSol column and time
 LOGLINE = re.compile(r'^ ?[A-Za-z ]?\s+\d+\s+\d+\s+\d+\s+[\d.]+%\s+\S+\s+(\S+)\s+.*\s([\d.]+)s$')
 CBCSOL = re.compile(r'^Cbc0012I Integer solution of (\S+) found .*\(([\d.]+) seconds\)')
@@ -218,7 +218,7 @@ def check(r, ref):
         return 'WRONG: optimal without a solution'
     if d is not None and s * (d - z) > tol:
         return f'WRONG: dual bound {d} beyond known objective {z}'
-    if p is not None and s * (p - z) < -tol:
+    if p is not None and s * (p - z) < -10 * tol:  # 1e-5: SCIP's mas74 incumbent is 7e-6 below (feasibility tolerance)
         return f'WRONG: primal {p} better than optimum {z}' if kind == 'opt' else f'improves best known {z}: {p}'
     if kind == 'opt' and st == 'optimal' and s * (p - z) > 1e-4 * max(1.0, abs(z)) + tol:
         return f'WRONG: optimal at {p}, optimum {z}'
@@ -275,7 +275,7 @@ def run(a):
                 st = 'killed' if killed else norm(res.get('raw')) if res.get('raw') else 'error'
                 if p.returncode not in (0, None) and st not in ('killed',) and p.returncode < 0:
                     st = 'error'  # killed by a signal (segfault, OOM, abort)
-                r = dict(suite=a.suite + (f" [{' '.join(a.opts)}]" if a.opts else ''), solver=s, ver=res.pop('ver', ver.get(s)), inst=nm, lp=lp, arch=arch, cpu=cpu, tl=a.tl,
+                r = dict(suite=a.suite + (f" [{' '.join(a.opts)}]" if a.opts else ''), solver=s, ver=res.pop('ver', None) or ver.get(s), inst=nm, lp=lp, arch=arch, cpu=cpu, tl=a.tl,
                          threads=a.threads, sense=sn, status=st, raw=res.get('raw'), primal=res.get('primal'), dual=res.get('dual'),
                          wall=round(wall, 3), solver_time=res.get('solver_time'), nodes=res.get('nodes'), rc=p.returncode,
                          traj=res.get('traj', []), ref=None if lp else ref.get(nm))
@@ -331,6 +331,7 @@ def report(a):
         return
     by = defaultdict(dict)  # (arch, suite) -> inst -> solver -> row
     for r in rows:
+        r['check'] = check(r, r['ref'])  # with this version's tolerances
         by[(r['arch'], r['suite'])].setdefault(r['inst'], {})[r['solver']] = r
     # LP: objectives of solvers that both claim optimal must agree
     for runs in by.values():
@@ -347,7 +348,7 @@ def report(a):
     bad = [r for r in rows if r['check'].startswith('WRONG') or r['status'] in ('error', 'killed')]
     print(f"# Standard benchmarks: {', '.join(sorted({r['suite'] for r in rows}))}; time limit "
           f"{', '.join(sorted({str(r['tl']) for r in rows}))} s; threads {', '.join(sorted({str(r['threads']) for r in rows}))}\n")
-    print('Solvers: ' + '; '.join(sorted({r['solver'] + ': ' + str(r['ver']) for r in rows})) + '\n')
+    print('Solvers: ' + '; '.join(sorted({r['solver'] + ': ' + str(r['ver']) for r in rows if r['ver']})) + '\n')
     print(f"## Wrong answers, crashes, kills: {len(bad)}\n")
     for r in sorted(bad, key=lambda r: (r['solver'] != 'crest', r['arch'], r['inst'])):
         print(f"- **{r['solver']}** {r['arch']} {r['inst']}: {r['status']} (rc {r['rc']}) {r['check']}"
@@ -407,6 +408,7 @@ def selftest():
     assert check(dict(r, primal=9.0, dual=9.0), r['ref']).startswith('WRONG: primal')
     assert check(dict(r, dual=10.5), r['ref']).startswith('WRONG: dual')
     assert check(dict(r, primal=9.5, dual=None, status='timelimit'), r['ref']).startswith('WRONG: primal')
+    assert check(dict(r, primal=10 - 5e-5, dual=None, status='timelimit'), r['ref']) == ''
     assert check(dict(r, primal=11.0, dual=None), r['ref']).startswith('WRONG: optimal at')
     assert check(dict(r, status='infeasible', primal=None), r['ref']).startswith('WRONG')
     assert check(dict(r, sense=-1, primal=10.5, dual=10.5), r['ref']).startswith('WRONG')  # maximize: better is larger
