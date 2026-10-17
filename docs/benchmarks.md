@@ -51,6 +51,7 @@ and highs only, e.g. `solver=ipm` (IPX in both).
 
 Each JSONL record (artifact `std-results`) has the instance, solver and
 version, arch, CPU model, status, primal and dual bounds, wall time, the
+iteration counts (simplex, IPM, crossover, PDLP), the
 incumbent trajectory and the check. On each runner every instance runs
 all solvers back to back (the order rotating), so they see the same CPU.
 
@@ -113,17 +114,23 @@ fixed-format file neither reads, has since been dropped)
 |---|---|---|---|---|---|
 | x64 | default (dual simplex) | crest | **231** | **2.91** | 0.926 |
 | x64 | default (dual simplex) | HiGHS 1.15.1 | 228 | 3.22 | |
-| x64 | `solver=ipm` (IPX) | crest | 241 | 3.26 | 1.062 |
-| x64 | `solver=ipm` (IPX) | HiGHS 1.15.1 | **243** | **2.98** | |
+| x64 | `solver=ipm` (IPX) | crest | 242 | 3.04 | 1.029 |
+| x64 | `solver=ipm` (IPX) | HiGHS 1.15.1 | **243** | **2.89** | |
 | arm64 | default (dual simplex) | crest | 231 | **2.89** | 0.920 |
 | arm64 | default (dual simplex) | HiGHS 1.15.1 | 231 | 3.22 | |
-| arm64 | `solver=ipm` (IPX) | crest | 241 | 3.24 | 1.015 |
-| arm64 | `solver=ipm` (IPX) | HiGHS 1.15.1 | **242** | **3.14** | |
+| arm64 | `solver=ipm` (IPX) | crest | 241 | 3.05 | 0.995 |
+| arm64 | `solver=ipm` (IPX) | HiGHS 1.15.1 | **242** | **3.04** | |
 
-IPX is where crest trails the release: on irish-electricity's relaxation
-crest ends "Unknown" (imprecise crossover, simplex clean-up; so does the
-C++ app of the pinned fork, while 1.15.1 ends "Optimal"), and
-neos-631710 (4.9x on x64), neos-5049753-cuanza, neos-4763324-toguru (2x),
-neos-4532248-waihi, chromaticindex512-7 (1.6x) are slower. Simplex: slowest
+The `solver=ipm` rows are from 2026-10-17 (crest `ipm`, run
+39003533706; was 3.26 against 2.98 on x64, 3.24 against 3.14 on arm64,
+before the IPX matching and bounds-check work of docs/performance.md).
+What remains is floating-point paths: the release is a gcc build (no FMA
+on x64), and crest built like it (`libstdcxx no_fma`, generic x86_64)
+takes its path on 243 of 249 LPs. On crest's paths neos-631710 (3.8x on
+x64), neos-4763324-toguru and neos-5049753-cuanza (2x) are slower, and
+irish-electricity's relaxation ends "Unknown" (the dual simplex on the
+original LP after postsolve stops with 3e-5 primal infeasibilities; the
+C++ app of the pinned fork does the same, the no_fma build ends
+"Optimal" like 1.15.1). Simplex: slowest
 are physiciansched3-3 and ns1760995 relaxations (time limit vs 250-260 s on
 arm64) and cod105 (1.1-1.4x).

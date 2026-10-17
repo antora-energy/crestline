@@ -88,6 +88,7 @@ fn matching(model: &Model, basis: &[Int]) -> Vec<Int> {
     let mut work = vec![0; m];
     let mut work2 = vec![0; m + 1];
     let mut work3 = vec![0; m + 1];
+    let mut work4 = vec![0; m + 1];
     // singleton columns first
     for pass in 0..2 {
         for &j in basis {
@@ -104,6 +105,7 @@ fn matching(model: &Model, basis: &[Int]) -> Vec<Int> {
                     &mut work,
                     &mut work2,
                     &mut work3,
+                    &mut work4,
                 );
             }
         }

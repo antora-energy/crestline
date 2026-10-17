@@ -161,7 +161,8 @@ def parse(solver, out, wall):
         raw = g(r'^  Status\s+(.*)$') or g(r'^Model status\s*:\s*(.*)$')
         primal = num(g(r'^  Primal bound\s+(\S+)')) if re.search(r'^  Primal bound', out, re.M) else num(g(r'^Objective value\s*:\s*(\S+)'))
         return dict(raw=raw, primal=primal, dual=num(g(r'^  Dual bound\s+(\S+)')), traj=traj,
-                    nodes=int(g(r'^  Nodes\s+(\d+)') or 0), solver_time=num(g(r'^  Timing\s+(\S+)') or g(r'^HiGHS run time\s*:\s*(\S+)')))
+                    nodes=int(g(r'^  Nodes\s+(\d+)') or 0),
+                    iters={k: int(v) for k, v in re.findall(r'^(\w+)\s+iterations\s*:\s*(\d+)', out, re.M)}, solver_time=num(g(r'^  Timing\s+(\S+)') or g(r'^HiGHS run time\s*:\s*(\S+)')))
     if solver == 'scip':
         return json.loads(out.strip().splitlines()[-1]) if out.strip() else dict(raw=None)
     if solver == 'cbc':
@@ -277,7 +278,7 @@ def run(a):
                     st = 'error'  # killed by a signal (segfault, OOM, abort)
                 r = dict(suite=a.suite + (f" [{' '.join(a.opts)}]" if a.opts else ''), solver=s, ver=res.pop('ver', None) or ver.get(s), inst=nm, lp=lp, arch=arch, cpu=cpu, tl=a.tl,
                          threads=a.threads, sense=sn, status=st, raw=res.get('raw'), primal=res.get('primal'), dual=res.get('dual'),
-                         wall=round(wall, 3), solver_time=res.get('solver_time'), nodes=res.get('nodes'), rc=p.returncode,
+                         wall=round(wall, 3), solver_time=res.get('solver_time'), nodes=res.get('nodes'), iters=res.get('iters'), rc=p.returncode,
                          traj=res.get('traj', []), ref=None if lp else ref.get(nm))
                 r['check'] = check(r, r['ref'])
                 if st == 'error':

@@ -202,6 +202,7 @@ fn process_remaining(
     let mut work = vec![0; m];
     let mut work2 = vec![0; m + 1];
     let mut work3 = vec![0; m + 1];
+    let mut work4 = vec![0; m + 1];
     let mut num_matched = 0;
     let mut num_failed: Int = 0;
 
@@ -223,6 +224,7 @@ fn process_remaining(
             &mut work,
             &mut work2,
             &mut work3,
+            &mut work4,
         );
         if matched {
             basis.push(j);

@@ -74,16 +74,21 @@ impl LinearOperator for NormalMatrix<'_> {
 /// val)
 #[inline(always)]
 fn normal_column(idx: &[Int], val: &[f64], w: Option<f64>, rhs: &[f64], lhs: &mut [f64]) {
+    // The row indices of AI are < m = rhs.len() = lhs.len() (Model's
+    // invariant), so the gathers and scatters skip the bounds checks.
+    debug_assert!(rhs.len() == lhs.len() && idx.iter().all(|&i| (i as usize) < rhs.len()));
     let mut d = 0.0f64;
     for (&i, &v) in idx.iter().zip(val) {
-        d = rhs[i as usize].mul_add_c(v, d);
+        // SAFETY: i < m (above)
+        d = unsafe { *rhs.get_unchecked(i as usize) }.mul_add_c(v, d);
     }
     if let Some(w) = w {
         d *= w;
     }
     for (&i, &v) in idx.iter().zip(val) {
-        let i = i as usize;
-        lhs[i] = d.mul_add_c(v, lhs[i]);
+        // SAFETY: i < m (above)
+        let l = unsafe { lhs.get_unchecked_mut(i as usize) };
+        *l = d.mul_add_c(v, *l);
     }
 }
 
