@@ -655,6 +655,17 @@ Totals against main (instructions, same paths): widden 0.729, rail507
 neos-933966 0.857, the hard dispatch tick's root 0.981; s100 presolve
 0.577; the dispatch models at 100 nodes 0.99-1.00 (they are LP-bound).
 
+**Runners** (`bench-dispatch`, main against this branch, 25 dispatch
+models x 4 seeds, one thread, 180 s; run 38997905789): every one of the
+100 pairs per architecture ends with the same primal and dual bound
+(x86_64 built for x86-64-v3, so the FMA two-product is checked there
+too; the pairs that differ in node count are the time-limited hard ticks,
+which get further in 180 s). Time, geometric mean over the solved models:
+x86_64 0.994, arm64 0.992; largest ratio lambda_080458 1.013
+[1.003, 1.024] on x86_64 (0.990 on arm64), smallest
+dm_small_randsoc_noramp 0.958 / 0.970. The dispatch models are LP-bound,
+so the gains are small there.
+
 **Tried and rejected:**
 - c-MIR efficacy (`cmir_efficacy`) with the norm update by a select
   instead of the data-dependent branch: +5% instructions on air04, cycles
