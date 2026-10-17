@@ -31,3 +31,14 @@ impl ClangFma for f64 {
         }
     }
 }
+
+/// The CPU has fused multiply-add instructions (whatever `no_fma` says)
+pub const HW_FMA: bool = cfg!(any(target_arch = "aarch64", all(target_arch = "x86_64", target_feature = "fma")));
+
+/// a * b - x by one fused multiply-add: for x = a * b rounded, its exact
+/// rounding error (an error-free transformation, so the same value as
+/// Dekker's product in any build). Only where HW_FMA.
+#[inline(always)]
+pub fn product_error(a: f64, b: f64, x: f64) -> f64 {
+    a.mul_add(b, -x)
+}
