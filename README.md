@@ -27,7 +27,10 @@ x86-64-v3 machine and an Apple silicon Mac take the same paths.
 
 Cargo features: `no_fma` never fuses multiply-adds (as a C++ build without
 FMA instructions, or gcc with `-ffp-contract=off`); `libstdcxx` follows
-libstdc++'s tie orders instead of libc++'s. It is all Rust (no C++
+libstdc++'s tie orders instead of libc++'s; `hyper_dfs` makes the
+hyper-sparse triangular solves by HiGHS's depth-first search (by default
+they run in the dense solve's order over a bitmap, which can differ from
+HiGHS in the last bits). It is all Rust (no C++
 compiler needed); its only crates.io dependency is flate2 (pure-Rust
 miniz_oxide backend) for gzip-compressed model files.
 
@@ -64,8 +67,11 @@ Details: [docs/porting.md](./docs/porting.md).
 
 ## Verification
 
-Crestline makes the same floating-point operations in the same order as
-the C++ HiGHS it derives from, so its output (logs, solution and basis
+Built with the `hyper_dfs` feature and run with the options that restore
+HiGHS's behaviour (`mip_graph_lns_cost_perturbation = true`,
+`mip_root_lp_devex_density = inf`), Crestline makes the same
+floating-point operations in the same order as the C++ HiGHS it derives
+from, so its output (logs, solution and basis
 files, iteration and node counts) matches the C++ `highs` app byte for
 byte, but for timings and a few deliberate differences (the third-party
 notice, and features left out).
@@ -75,16 +81,16 @@ CI (`.github/workflows/ci.yml`) runs on Linux x86_64:
 - `cargo test --release` (unit tests against C++ reference values) and
   `cargo build --release --bin crest`;
 - an oracle job: it builds the C++ `highs` app from a pinned HiGHS commit
-  with gcc and `-ffp-contract=off`, builds crest with the `libstdcxx` and
-  `no_fma` features (which follow libstdc++'s tie orders and unfused
-  multiply-adds), and runs `bench/quick_check.sh`: Netlib LPs with presolve
+  with gcc and `-ffp-contract=off`, builds crest with the `libstdcxx`,
+  `no_fma` and `hyper_dfs` features (which follow libstdc++'s tie orders,
+  unfused multiply-adds and HiGHS's hyper-sparse solves), and runs `bench/quick_check.sh`: Netlib LPs with presolve
   on and off, MIPs at a 200-node limit, the full logs of every LP-format
   test model and gzip models, and the 166 command lines of
   `bench/cli_cases.txt` (`bench/cli_compare.sh`), comparing outputs and
   written files.
 
-Locally, against a clang build of the C++ app on macOS, default features
-match (and so does an x86-64-v3 build under Rosetta): `HIGHS_DIR=<HiGHS
+Locally, against a clang build of the C++ app on macOS, a build with
+`--features hyper_dfs` matches (and so does an x86-64-v3 build under Rosetta): `HIGHS_DIR=<HiGHS
 checkout> bench/quick_check.sh <highs> target/release/crest`.
 
 _Crestline is MIT-licensed; it derives from HiGHS (Copyright (c) HiGHS developers, MIT)._

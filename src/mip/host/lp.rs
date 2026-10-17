@@ -639,9 +639,13 @@ impl LpS {
             }
             ms.prof.set_submip(profiling_submip);
             ms.prof.solve_call(2, ms.submip);
-            // A first root LP may switch from DSE to Devex where the DSE
-            // FTRAN is dense (later solves start from the weights it leaves)
-            let devex_switch = !valid_basis && !ms.submip && o.mip_root_lp_devex_density < f64::INFINITY;
+            // A first root LP of at least 10000 rows may switch from DSE to
+            // Devex where the DSE FTRAN is dense (later solves start from
+            // the weights it leaves). Below 10000 rows the switch saves
+            // little and the dispatch suite gets slightly slower
+            // (dm_small_windlull 1.22x)
+            let devex_switch =
+                !valid_basis && !ms.submip && o.mip_root_lp_devex_density < f64::INFINITY && self.num_rows() >= 10000;
             if devex_switch {
                 self.set_option("simplex_dse_to_devex_density", OptValue::Double(o.mip_root_lp_devex_density));
             }
