@@ -905,6 +905,31 @@ gained). perf.py (main -> head, M1 cycles): LP dual simplex 0.972, primal
 0.933, IPX 0.992, MIP 0.952, all 0.971; dispatch 3c1b60d6 relaxation
 0.666.
 
+### Confirmation on the final head (10000-row gate), and diverse_10-01
+
+16 seeds, all 29 models, head against main: one thread 0.915 (x86_64) and
+0.882 (arm64), solved 387 -> 387 and 387 -> 388, dm_small_windlull 0.99 /
+0.97 (the gate); two threads 0.939 and 0.929, solved 396 -> 395 and 398 ->
+395. The two-thread drop is diverse_10-01 (12 -> 10, 14 -> 11 solved at 16
+seeds), so it was rerun at 32 seeds with the parts separated: A = main,
+B = the switch alone (HiGHS's DFS order, `hyper_dfs`), C = the dense-order
+solves alone (`mip_root_lp_devex_density = inf`), D = both (the default).
+
+| 32 seeds | | diverse solved | diverse gap (B-A) | diverse pg | hard_10-03 pg |
+|---|---|---|---|---|---|
+| one thread, x86_64 | B / C / D | 7 / 8 / 9 (A: 7) | +0.00 / -0.05 / -0.06 +- 0.05 | -0.03 / -0.28 / -0.28 | -0.01 / -0.34 / -0.33 |
+| one thread, arm64 | B / C / D | 4 / 7 / 8 (A: 4) | -0.00 / -0.05 / -0.06 +- 0.05 | +0.02 / -0.24 / -0.23 | -0.03 / -0.38 / -0.35 |
+| two threads, x86_64 | B / C / D | 21 / 20 / 20 (A: 19) | -0.01 / +0.01 / +0.01 +- 0.02 | +0.00 / -0.04 / -0.04 | -0.01 / -0.35 / -0.35 |
+| two threads, arm64 | B / C / D | 24 / 26 / 24 (A: 18) | -0.00 / -0.01 / +0.01 +- 0.02 | +0.02 / -0.09 / -0.10 | +0.04 / -0.35 / -0.35 |
+
+So the 16-seed drop was path luck; the dense-order solves are what improve
+the two hard ticks (their LNS LPs), the switch does not fire on them.
+Cost per hyper-sparse solve on diverse (1 thread, 60 s, instruction
+clock): bitmap 0.34 / 3.6 / 26 us against DFS 0.40 / 4.6 / 40 us for
+results of under 16 / under 256 / more nonzeros, so the O(rows/64) scan of
+the bitmap does not cost on its many tiny solves. unitcal_7 (MIPLIB) one
+thread 1.35-1.39 [0.98, 1.92] (solve order; B&B path), two threads 0.79-0.81.
+
 ### Tried and rejected
 
 - Switching at density 0.3: fired on 19 of 25 dispatch models, including
