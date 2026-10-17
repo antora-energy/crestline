@@ -67,6 +67,35 @@ Checks cost: run the cheap ones per change, the expensive ones per batch.
   (`gcc_builds.sh`), x86_64 under Rosetta, 300-node MIP suite, ctest with
   ALL_TESTS, `perf.py --reps 3`.
 
+## Shrinking a failing instance
+
+When crest diverges from the C++ app, crashes, or returns a wrong or poor
+answer on a model, `bench/mipdd.sh [-o OPTIONS_FILE] INSTANCE PREDICATE`
+cuts the model down with MIP-DD (github.com/scipopt/MIP-DD, Hoen, Kamp
+and Gleixner, arXiv:2405.19770) while the predicate keeps holding.
+PREDICATE is `diff` (model status or objective differs from HIGHS_BIN's,
+both run with OPTIONS_FILE, default one thread, seed 0, 1000 nodes; a
+time limit makes the predicate flaky), `crash`
+(signal or panic), `above=V` / `below=V` (crest's objective), or a program
+run as `PROGRAM MODEL.mps` that exits 0 when the model is still bad. It
+writes INSTANCE_min.mps. MIP-DD is built on first use into
+`~/.cache/mipdd` (needs boost and tbb, e.g. `brew install boost tbb`)
+with bench/mipdd/ShellInterface.hpp in place of its SCIP or SoPlex
+interface: each trial is written as MPS and handed to the predicate, so
+nothing is linked into crest. The C++ app's solution (else crest's) is
+the reference solution that MIP-DD keeps feasible while it removes rows
+and columns, fixes variables, drops coefficients and objective terms and
+rounds numbers.
+
+Example: with a sign error injected into singleton_row's bound for a
+negative coefficient (`row_upper / val.abs()`), `bench/mipdd.sh
+check/instances/p0548.mps diff` takes p0548 (176 rows, 548 binaries) to
+one equality row over two binaries, `-180 x - 71 y = -71`, on which
+crest reports a solve error and the C++ app the optimum 0, in about 100
+solves (30 s, plus 15 s to build MIP-DD). Dispatch
+instances are private: shrink them locally and do not commit the result
+unless it is anonymized.
+
 ## Known divergences from the C++ (deliberate)
 
 - **dualize (simplex_dualize_strategy on, not the default):** HEkk keeps the
