@@ -28,61 +28,85 @@ pub(crate) fn dfs(
     marked: &mut [Int],
     mk: Int,
 ) -> Int {
-    if marked[i as usize] == mk {
-        return top;
-    }
-    let mut head: isize = 0;
-    xi[0] = i;
-    while head >= 0 {
-        let h = head as usize;
-        let i = xi[h];
-        let iu = i as usize;
-        if marked[iu] != mk {
-            // node i has not been visited
-            marked[iu] = mk;
-            pstack[h] = begin[iu];
+    // Unchecked indexing (the C code's). Invariants of the factorization's
+    // own arrays: nodes are < m <= marked.len(), begin.len() and end.len();
+    // the neighbour lists lie in index (ending at end[j] or at a negative
+    // entry); top <= m, and the stack xi[0..head] and the reach
+    // xi[top..] hold distinct unmarked-on-entry nodes, so head < top.
+    let nn = marked.len();
+    assert!((i as usize) < nn && top >= 0 && xi.len() >= top as usize && pstack.len() >= top as usize);
+    debug_assert!(begin.len() >= nn && end.map_or(true, |e| e.len() >= nn));
+    // SAFETY: under the invariants above every access is in bounds (the
+    // debug_asserts check them in debug builds)
+    unsafe {
+        let at = |v: &[Int], k: usize| -> Int {
+            debug_assert!(k < v.len());
+            *v.get_unchecked(k)
+        };
+        let xi = xi.as_mut_ptr();
+        let pstack = pstack.as_mut_ptr();
+        let marked = marked.as_mut_ptr();
+        if *marked.add(i as usize) == mk {
+            return top;
         }
-        let mut done = true;
-        // continue dfs at node i
-        let mut p = pstack[h] as usize;
-        match end {
-            Some(end) => {
-                let pend = end[iu] as usize;
-                while p < pend {
-                    let inext = index[p];
-                    if marked[inext as usize] != mk {
-                        pstack[h] = p as Int + 1;
+        let mut head: isize = 0;
+        *xi = i;
+        while head >= 0 {
+            let h = head as usize;
+            debug_assert!(head < top as isize);
+            let i = *xi.add(h);
+            let iu = i as usize;
+            debug_assert!(iu < nn);
+            if *marked.add(iu) != mk {
+                // node i has not been visited
+                *marked.add(iu) = mk;
+                *pstack.add(h) = at(begin, iu);
+            }
+            let mut done = true;
+            // continue dfs at node i
+            let mut p = *pstack.add(h) as usize;
+            match end {
+                Some(end) => {
+                    let pend = at(end, iu) as usize;
+                    while p < pend {
+                        let inext = at(index, p);
+                        debug_assert!((inext as usize) < nn);
+                        if *marked.add(inext as usize) != mk {
+                            *pstack.add(h) = p as Int + 1;
+                            head += 1;
+                            *xi.add(head as usize) = inext; // start dfs at node inext
+                            done = false;
+                            break;
+                        }
+                        p += 1; // skip visited node
+                    }
+                }
+                None => loop {
+                    let inext = at(index, p);
+                    if inext < 0 {
+                        break;
+                    }
+                    debug_assert!((inext as usize) < nn);
+                    if *marked.add(inext as usize) != mk {
+                        *pstack.add(h) = p as Int + 1;
                         head += 1;
-                        xi[head as usize] = inext; // start dfs at node inext
+                        *xi.add(head as usize) = inext; // start dfs at node inext
                         done = false;
                         break;
                     }
                     p += 1; // skip visited node
-                }
+                },
             }
-            None => loop {
-                let inext = index[p];
-                if inext < 0 {
-                    break;
-                }
-                if marked[inext as usize] != mk {
-                    pstack[h] = p as Int + 1;
-                    head += 1;
-                    xi[head as usize] = inext; // start dfs at node inext
-                    done = false;
-                    break;
-                }
-                p += 1; // skip visited node
-            },
+            if done {
+                // node i has no unvisited neighbours
+                head -= 1;
+                top -= 1;
+                debug_assert!(top >= 0);
+                *xi.add(top as usize) = i;
+            }
         }
-        if done {
-            // node i has no unvisited neighbours
-            head -= 1;
-            top -= 1;
-            xi[top as usize] = i;
-        }
+        top
     }
-    top
 }
 
 /// lu_solve_symbolic: the pattern of the right-hand side is irhs; the
@@ -135,28 +159,47 @@ pub(crate) fn solve_triangular(
     let mut nz = 0usize;
     let mut flop_count: Int = 0;
 
-    // The four variants are separate loops, as in the C code.
+    // The four variants are separate loops, as in the C code. Unchecked
+    // indexing as in C: the pattern and the column indices are rows <
+    // lhs.len(), the columns lie in index/value (ending at end[j] or at a
+    // negative index), pattern has room for the pattern (invariants of the
+    // factorization's arrays, checked by the debug_asserts).
+    let nl = lhs.len();
+    debug_assert!(pattern_symb.iter().all(|&i| (i as usize) < nl && (i as usize) < begin.len()));
+    assert!(pattern.len() >= pattern_symb.len() && value.len() >= index.len());
+    let at = |v: &[Int], k: usize| -> Int {
+        debug_assert!(k < v.len());
+        // SAFETY: k in bounds by the invariants above
+        unsafe { *v.get_unchecked(k) }
+    };
+    let lhs = lhs.as_mut_ptr();
     macro_rules! column {
         ($ipivot:expr, $x:expr, $end:expr) => {
-            match $end {
-                Some(end) => {
-                    for pos in begin[$ipivot] as usize..end[$ipivot] as usize {
-                        let i = index[pos] as usize;
-                        lhs[i] = (-$x).mul_add_c(value[pos], lhs[i]);
-                        flop_count += 1;
-                    }
-                }
-                None => {
-                    let mut pos = begin[$ipivot] as usize;
-                    loop {
-                        let i = index[pos];
-                        if i < 0 {
-                            break;
+            // (inside solve!'s unsafe block: positions < index.len() <=
+            // value.len(), rows < nl)
+            {
+                match $end {
+                    Some(end) => {
+                        for pos in at(begin, $ipivot) as usize..at(end, $ipivot) as usize {
+                            let i = at(index, pos) as usize;
+                            debug_assert!(i < nl);
+                            *lhs.add(i) = (-$x).mul_add_c(*value.get_unchecked(pos), *lhs.add(i));
+                            flop_count += 1;
                         }
-                        let i = i as usize;
-                        lhs[i] = (-$x).mul_add_c(value[pos], lhs[i]);
-                        flop_count += 1;
-                        pos += 1;
+                    }
+                    None => {
+                        let mut pos = at(begin, $ipivot) as usize;
+                        loop {
+                            let i = at(index, pos);
+                            if i < 0 {
+                                break;
+                            }
+                            let i = i as usize;
+                            debug_assert!(i < nl);
+                            *lhs.add(i) = (-$x).mul_add_c(*value.get_unchecked(pos), *lhs.add(i));
+                            flop_count += 1;
+                            pos += 1;
+                        }
                     }
                 }
             }
@@ -166,21 +209,24 @@ pub(crate) fn solve_triangular(
         ($end:expr) => {
             for &ip in pattern_symb {
                 let ipivot = ip as usize;
-                if lhs[ipivot] != 0.0 {
-                    let x = match pivot {
-                        Some(pivot) => {
-                            lhs[ipivot] /= pivot[ipivot];
-                            flop_count += 1;
-                            lhs[ipivot]
+                // SAFETY: ipivot < nl, nz < pattern_symb.len() <= pattern.len()
+                unsafe {
+                    if *lhs.add(ipivot) != 0.0 {
+                        let x = match pivot {
+                            Some(pivot) => {
+                                *lhs.add(ipivot) /= pivot[ipivot];
+                                flop_count += 1;
+                                *lhs.add(ipivot)
+                            }
+                            None => *lhs.add(ipivot),
+                        };
+                        column!(ipivot, x, $end);
+                        if x.abs() > droptol {
+                            *pattern.get_unchecked_mut(nz) = ip;
+                            nz += 1;
+                        } else {
+                            *lhs.add(ipivot) = 0.0;
                         }
-                        None => lhs[ipivot],
-                    };
-                    column!(ipivot, x, $end);
-                    if x.abs() > droptol {
-                        pattern[nz] = ip;
-                        nz += 1;
-                    } else {
-                        lhs[ipivot] = 0.0;
                     }
                 }
             }

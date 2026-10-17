@@ -74,63 +74,86 @@ pub fn augmenting_path(
     // istack holds row indices without duplicates.
     // jstack holds jstart and up to m indices from jmatch.
     // pstack holds the corresponding column pointers.
-    let istack = work;
-    let jstack = work2;
-    let pstack = work3;
-    let mut found = false;
-    let mut head: Int = 0;
-    jstack[0] = jstart;
-    while head >= 0 {
-        let h = head as usize;
-        let j = jstack[h] as usize;
-        if marked[j] != jstart {
-            // first time j visited in this path
-            marked[j] = jstart;
-            let mut i = 0;
-            let mut p = cheap[j];
-            // C loop: the increment also runs after the match is found
-            while p < ap[j + 1] && !found {
-                i = ai[p as usize];
-                found = jmatch[i as usize] == -1;
-                p += 1;
+    let m = jmatch.len();
+    let ncol = marked.len();
+    assert!(ap.len() > ncol && cheap.len() >= ncol && work.len() >= m && work2.len() > m && work3.len() > m);
+    assert!(ap[ncol] as usize <= ai.len() && (jstart as usize) < ncol);
+    // Unchecked indexing below: ap[0..=ncol] are pointers into ai (ap[j] <=
+    // ap[j+1] <= ap[ncol]), ai holds rows < m, jmatch columns < ncol (or
+    // < 0), and a path has at most m + 1 nodes, as the C++ assumes.
+    // SAFETY: under those invariants of the CSC matrix and the matching
+    // every index is in bounds (checked by the debug_asserts).
+    unsafe {
+        let ix = |v: &[Int], k: usize| -> Int {
+            debug_assert!(k < v.len());
+            *v.get_unchecked(k)
+        };
+        let istack = work.as_mut_ptr();
+        let jstack = work2.as_mut_ptr();
+        let pstack = work3.as_mut_ptr();
+        let jmatch_p = jmatch.as_mut_ptr();
+        let marked_p = marked.as_mut_ptr();
+        let mut found = false;
+        let mut head: Int = 0;
+        *jstack = jstart;
+        while head >= 0 {
+            let h = head as usize;
+            debug_assert!(h <= m);
+            let j = *jstack.add(h) as usize;
+            debug_assert!(j < ncol);
+            if *marked_p.add(j) != jstart {
+                // first time j visited in this path
+                *marked_p.add(j) = jstart;
+                let mut i = 0;
+                let mut p = ix(cheap, j);
+                let pend = ix(ap, j + 1);
+                // C loop: the increment also runs after the match is found
+                while p < pend && !found {
+                    i = ix(ai, p as usize);
+                    debug_assert!((i as usize) < m);
+                    found = *jmatch_p.add(i as usize) == -1;
+                    p += 1;
+                }
+                *cheap.get_unchecked_mut(j) = p;
+                if found {
+                    *istack.add(h) = i;
+                    break;
+                }
+                *pstack.add(h) = ix(ap, j); // start depth-first search from j
             }
-            cheap[j] = p;
-            if found {
-                istack[h] = i;
+            let pbeg = *pstack.add(h);
+            let pend = ix(ap, j + 1);
+            let mut p = pbeg;
+            while p < pend {
+                let i = ix(ai, p as usize);
+                debug_assert!((i as usize) < m);
+                let jm = *jmatch_p.add(i as usize);
+                if jm < -1 {
+                    // row to be ignored
+                    p += 1;
+                    continue;
+                }
+                debug_assert!(jm >= 0 && (jm as usize) < ncol);
+                if *marked_p.add(jm as usize) == jstart {
+                    p += 1;
+                    continue;
+                }
+                *pstack.add(h) = p + 1;
+                *istack.add(h) = i;
+                head += 1;
+                *jstack.add(head as usize) = jm; // continue augmenting path here
                 break;
             }
-            pstack[h] = ap[j]; // start depth-first search from j
-        }
-        let pbeg = pstack[h];
-        let pend = ap[j + 1];
-        let mut p = pbeg;
-        while p < pend {
-            let i = ai[p as usize];
-            let jm = jmatch[i as usize];
-            if jm < -1 {
-                // row to be ignored
-                p += 1;
-                continue;
+            if p == pend {
+                head -= 1;
             }
-            if marked[jm as usize] == jstart {
-                p += 1;
-                continue;
+        }
+        if found {
+            for p in (0..=head).rev() {
+                let p = p as usize;
+                *jmatch_p.add(*istack.add(p) as usize) = *jstack.add(p);
             }
-            pstack[h] = p + 1;
-            istack[h] = i;
-            head += 1;
-            jstack[head as usize] = jm; // continue augmenting path here
-            break;
         }
-        if p == ap[j + 1] {
-            head -= 1;
-        }
+        found
     }
-    if found {
-        for p in (0..=head).rev() {
-            let p = p as usize;
-            jmatch[istack[p] as usize] = jstack[p];
-        }
-    }
-    found
 }
