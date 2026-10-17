@@ -473,6 +473,9 @@ pub struct Presolve<'h> {
     /// as the C++ vector's capacity does
     pub(crate) rowpositions: Vec<i32>,
     pub(crate) rp_len: usize,
+    /// counts link and unlink calls: a stored row's positions are unchanged
+    /// while it is
+    pub(crate) matrix_version: u64,
     pub(crate) freeslots: Vec<i32>,
 
     pub(crate) impl_col_lower: Vec<f64>,
@@ -842,6 +845,7 @@ impl Presolve<'_> {
     }
 
     pub(crate) fn link(&mut self, pos: i32) {
+        self.matrix_version += 1;
         let p = pos as usize;
         let col = self.a_col[p];
         let row = self.a_row[p];
@@ -874,6 +878,7 @@ impl Presolve<'_> {
     }
 
     pub(crate) fn unlink(&mut self, pos: i32) {
+        self.matrix_version += 1;
         let p = pos as usize;
         let next = self.a_next[p];
         let prev = self.a_prev[p];

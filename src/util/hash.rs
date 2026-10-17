@@ -118,7 +118,7 @@ pub fn modexp_m31(a: u32, mut e: u64) -> u32 {
 }
 
 /// c[index % 64]^(index / 64 + 1) mod M61: the monomial of a sparse entry.
-fn monomial_m61(index: i32) -> u64 {
+pub fn monomial_m61(index: i32) -> u64 {
     modexp_m61(C[(index & 63) as usize] & M61, (index as i64 as u64 >> 6) + 1)
 }
 
@@ -136,9 +136,15 @@ fn add_mod_m61(hash: &mut u64, term: u64) {
 /// the random constants. Entries contribute independently, so the hash can
 /// be computed in any order and updated (see sparse_inverse_combine).
 pub fn sparse_combine(hash: &mut u64, index: i32, value: u64) {
+    sparse_combine_mono(hash, monomial_m61(index), value);
+}
+
+/// sparse_combine given the entry's monomial_m61(index)
+#[inline]
+pub fn sparse_combine_mono(hash: &mut u64, monomial: u64, value: u64) {
     // make sure the value is never zero and uses at most 61 bits
     let value = ((value << 1) & M61) | 1;
-    add_mod_m61(hash, multiply_mod_m61(value, monomial_m61(index)));
+    add_mod_m61(hash, multiply_mod_m61(value, monomial));
 }
 
 /// Undoes sparse_combine by adding the additive inverse.
@@ -156,11 +162,27 @@ pub fn sparse_inverse_combine_index(hash: &mut u64, index: i32) {
     add_mod_m61(hash, M61 - monomial_m61(index));
 }
 
-fn sparse_term_m31(index: i32, value: u64) -> u64 {
+/// The monomial of a sparse entry modulo 2^31 - 1 (see monomial_m61)
+pub fn monomial_m31(index: i32) -> u32 {
+    let a = (C[(index & 63) as usize] & M31) as u32;
+    modexp_m31(a, (index as i64 as u64 >> 6) + 1)
+}
+
+#[inline]
+fn sparse_term_m31_mono(monomial: u32, value: u64) -> u64 {
     // make sure the value is never zero and uses at most 31 bits
     let value = (pair_hash::<0>(value as u32, (value >> 32) as u32) >> 33) | 1;
-    let a = (C[(index & 63) as usize] & M31) as u32;
-    multiply_mod_m31(value as u32, modexp_m31(a, (index as i64 as u64 >> 6) + 1)) as u64
+    multiply_mod_m31(value as u32, monomial) as u64
+}
+
+fn sparse_term_m31(index: i32, value: u64) -> u64 {
+    sparse_term_m31_mono(monomial_m31(index), value)
+}
+
+/// sparse_combine32 given the entry's monomial_m31(index)
+#[inline]
+pub fn sparse_combine32_mono(hash: &mut u32, monomial: u32, value: u64) {
+    add_mod_m31(hash, sparse_term_m31_mono(monomial, value));
 }
 
 fn add_mod_m31(hash: &mut u32, term: u64) {

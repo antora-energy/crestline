@@ -356,6 +356,25 @@ impl<'a> BkData<'a> {
     }
 }
 
+/// Clique partitions find a literal's neighbours from its cliques when
+/// they hold fewer than this many times the candidates (a scan of clique
+/// entries is much cheaper than a hash query per candidate)
+const CLIQUE_PARTITION_WORK_RATIO: usize = 16;
+
+/// Positions of the literals in a clique partition's array, and marks by
+/// position
+struct PartitionPos {
+    pos: Vec<i32>,
+    mark: Vec<u32>,
+    stamp: u32,
+    mark2: Vec<u32>,
+    stamp2: u32,
+    /// the candidates of the next call, (start, end), when they all lie in
+    /// one clique with the literal before them: then they are all its
+    /// neighbours, and so on until the partition ends
+    anchored: Option<(usize, usize)>,
+}
+
 impl CliqueTable {
     pub fn new(ncols: i32) -> Self {
         let n = ncols as usize;
@@ -831,9 +850,110 @@ impl CliqueTable {
         self.num_entries -= len;
     }
 
+    /// The positions of the literals of clq_vars (or None if a column
+    /// occurs twice: then the queries are made one by one)
+    fn partition_positions(&self, clq_vars: &[CliqueVar]) -> Option<PartitionPos> {
+        let mut pos = vec![-1i32; self.numcliquesvar.len()];
+        for (i, v) in clq_vars.iter().enumerate() {
+            if pos[v.index()] != -1 || pos[v.complement().index()] != -1 {
+                return None;
+            }
+            pos[v.index()] = i as i32;
+        }
+        Some(PartitionPos { pos, mark: vec![0; clq_vars.len()], stamp: 0, mark2: vec![0; clq_vars.len()], stamp2: 0, anchored: None })
+    }
+
+    /// partitionNeighbourhood(v, clq_vars[s..e]) counting in the table's
+    /// own query counter, keeping `pos` (positions of the literals) up to
+    /// date. With `pos`, when v's cliques hold fewer entries than s..e,
+    /// the neighbours are found from v's cliques rather than by a query
+    /// per candidate: the same neighbours (the candidates sharing a clique
+    /// with v), so the same result and query count.
+    fn partition_at(&mut self, inds: &mut Vec<i32>, pp: Option<&mut PartitionPos>, v: CliqueVar, clq_vars: &mut [CliqueVar], s: usize, e: usize) -> usize {
+        let Some(pp) = pp else {
+            return self.partition_own(inds, v, &mut clq_vars[s..e]);
+        };
+        inds.clear();
+        let in_range = |p: i32| p >= s as i32 && p < e as i32;
+        if pp.anchored == Some((s, e)) {
+            // v and the candidates lie in one clique
+            inds.extend(0..(e - s) as i32);
+            self.num_neighbourhood_queries += (e - s) as i64 - in_range(pp.pos[v.complement().index()]) as i64;
+            pp.anchored = if e - s > 1 { Some((s + 1, e)) } else { None };
+            return inds.len();
+        }
+        pp.anchored = None;
+        if self.num_cliques(v) == 0 {
+            return 0;
+        }
+        // entries of v's cliques (numcliquesvar counts the size-two ones too)
+        let mut work = 2 * self.num_cliques(v).max(0) as usize;
+        self.inv[v.index()].for_each(|&id, _| work += self.cliques[id as usize].len() as usize);
+        if work < CLIQUE_PARTITION_WORK_RATIO * (e - s) {
+            pp.stamp = pp.stamp.wrapping_add(1);
+            if pp.stamp == 0 {
+                pp.mark.fill(0);
+                pp.stamp = 1;
+            }
+            let (pos, mark, stamp) = (&pp.pos, &mut pp.mark, pp.stamp);
+            let (mark2, stamp2) = (&mut pp.mark2, &mut pp.stamp2);
+            // the most candidates found in one clique
+            let mut max_in_one = 0usize;
+            let mut add = |id: i32| {
+                let c = self.cliques[id as usize];
+                *stamp2 = stamp2.wrapping_add(1);
+                if *stamp2 == 0 {
+                    mark2.fill(0);
+                    *stamp2 = 1;
+                }
+                let mut in_this = 0usize;
+                for &w in &self.entries[c.start as usize..c.end as usize] {
+                    let p = pos[w.index()];
+                    if in_range(p) && w.col() != v.col() {
+                        if mark2[p as usize] != *stamp2 {
+                            mark2[p as usize] = *stamp2;
+                            in_this += 1;
+                        }
+                        if mark[p as usize] != stamp {
+                            mark[p as usize] = stamp;
+                            inds.push(p - s as i32);
+                        }
+                    }
+                }
+                max_in_one = max_in_one.max(in_this);
+            };
+            self.inv2[v.index()].for_each(|&id, _| add(id));
+            self.inv[v.index()].for_each(|&id, _| add(id));
+            if max_in_one == inds.len() && inds.len() > 1 {
+                // the neighbours lie in one clique (with v)
+                pp.anchored = Some((s + 1, s + inds.len()));
+            }
+            if 8 * inds.len() > e - s {
+                inds.clear();
+                inds.extend((s..e).filter(|&p| mark[p] == stamp).map(|p| (p - s) as i32));
+            } else {
+                inds.sort_unstable();
+            }
+            // have_common_clique counts a query per candidate of another column
+            self.num_neighbourhood_queries += (e - s) as i64 - in_range(pos[v.complement().index()]) as i64;
+        } else {
+            let mut nq = self.num_neighbourhood_queries;
+            self.query_neighbourhood(inds, &mut nq, v, &clq_vars[s..e]);
+            self.num_neighbourhood_queries = nq;
+        }
+        for i in 0..inds.len() {
+            let (a, b) = (s + i, s + inds[i] as usize);
+            clq_vars.swap(a, b);
+            pp.pos[clq_vars[a].index()] = a as i32;
+            pp.pos[clq_vars[b].index()] = b as i32;
+        }
+        inds.len()
+    }
+
     /// cliquePartition(clqVars, partitionStart)
     pub fn clique_partition(&mut self, clq_vars: &mut [CliqueVar], partition_start: &mut Vec<i32>) {
         self.randgen.shuffle(clq_vars);
+        let mut pos = self.partition_positions(clq_vars);
         let mut inds = Vec::with_capacity(clq_vars.len());
         let n = clq_vars.len();
         partition_start.clear();
@@ -847,7 +967,7 @@ impl CliqueTable {
             }
             let v = clq_vars[i];
             let extension_start = i + 1;
-            extension_end = self.partition_own(&mut inds, v, &mut clq_vars[extension_start..extension_end])
+            extension_end = self.partition_at(&mut inds, pos.as_mut(), v, clq_vars, extension_start, extension_end)
                 + extension_start;
         }
         partition_start.push(n as i32);
@@ -860,6 +980,7 @@ impl CliqueTable {
             (2 * v1.val() - 1) as f64 * objective[v1.col() as usize] > (2 * v2.val() - 1) as f64 * objective[v2.col() as usize]
         };
         pdqsort_branchless(clq_vars, comp);
+        let mut pos = self.partition_positions(clq_vars);
         let mut inds = Vec::with_capacity(clq_vars.len());
         let n = clq_vars.len();
         partition_start.clear();
@@ -873,12 +994,17 @@ impl CliqueTable {
                 extension_end = n;
                 if last_swapped >= i {
                     pdqsort_branchless(&mut clq_vars[i..last_swapped + 1], comp);
+                    if let Some(pp) = pos.as_mut() {
+                        for (k, v) in clq_vars.iter().enumerate().take(last_swapped + 1).skip(i) {
+                            pp.pos[v.index()] = k as i32;
+                        }
+                    }
                 }
                 last_swapped = 0;
             }
             let v = clq_vars[i];
             let extension_start = i + 1;
-            extension_end = self.partition_own(&mut inds, v, &mut clq_vars[extension_start..extension_end])
+            extension_end = self.partition_at(&mut inds, pos.as_mut(), v, clq_vars, extension_start, extension_end)
                 + extension_start;
             if let Some(&last) = inds.last() {
                 last_swapped = last_swapped.max(last as usize + extension_start);

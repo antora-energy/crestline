@@ -18,6 +18,9 @@ struct DomCtx {
     num_fixed_cols: i32,
     num_fixed_cols_pred_bnd_analysis: i32,
     num_modified_bnds_pred_bnd_analysis: i32,
+    /// by row: the matrix version when its positions were stored, and the
+    /// positions (columns of the same rows are checked again and again)
+    row_cache: Vec<(u64, Vec<i32>)>,
 }
 
 impl Presolve<'_> {
@@ -246,7 +249,26 @@ impl Presolve<'_> {
         bound_implied: bool,
         has_cliques: bool,
     ) -> R {
-        self.store_row(row);
+        let version = self.matrix_version;
+        let r = row as usize;
+        if ctx.row_cache.len() <= r {
+            ctx.row_cache.resize_with(r + 1, || (u64::MAX, Vec::new()));
+        }
+        let e = &mut ctx.row_cache[r];
+        if e.0 == version {
+            // storeRow: the same positions
+            let n = e.1.len();
+            if self.rowpositions.len() < n {
+                self.rowpositions.resize(n, 0);
+            }
+            self.rowpositions[..n].copy_from_slice(&e.1);
+            self.rp_len = n;
+        } else {
+            self.store_row(row);
+            e.0 = version;
+            e.1.clear();
+            e.1.extend_from_slice(&self.rowpositions[..self.rp_len]);
+        }
         let only_pred_bnd_analysis = !bound_implied && !has_cliques;
         let n = self.rp_len;
         let c = col as usize;
@@ -288,6 +310,7 @@ impl Presolve<'_> {
             num_fixed_cols: 0,
             num_fixed_cols_pred_bnd_analysis: 0,
             num_modified_bnds_pred_bnd_analysis: 0,
+            row_cache: Vec::new(),
         };
         for i in 0..self.a_value.len() {
             if self.a_value[i] == 0.0 {

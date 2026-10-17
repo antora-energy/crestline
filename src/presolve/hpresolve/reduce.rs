@@ -788,6 +788,10 @@ impl Presolve<'_> {
         let mut stack: Vec<i32> = Vec::new();
         let mut coefs: Vec<f64> = Vec::new();
         let mut cover: Vec<i32> = Vec::new();
+        // the indices whose reduced cost changed since the last sort
+        let mut changed: Vec<i32> = Vec::new();
+        let mut is_changed: Vec<bool> = Vec::new();
+        let mut merge_buf: Vec<i32> = Vec::new();
         let feastol = self.primal_feastol;
 
         *num_strengthened = 0;
@@ -879,15 +883,55 @@ impl Presolve<'_> {
             }
 
             let small_val = std_max(100.0 * feastol, feastol * maxviolation.to_f64());
+            for &i in &changed {
+                is_changed[i as usize] = false;
+            }
+            changed.clear();
             loop {
                 if maxviolation - continuouscontribution <= small_val || indices.is_empty() {
                     break;
                 }
-                pdqsort(&mut indices, |&i1, &i2| {
+                // std::make_pair(rc[i1], i1) > std::make_pair(rc[i2], i2): a
+                // strict total order, so any sort gives pdqsort's order
+                let gt = |i1: i32, i2: i32| {
                     let (a, b) = (reducedcost[i1 as usize], reducedcost[i2 as usize]);
-                    // std::make_pair(rc[i1], i1) > std::make_pair(rc[i2], i2)
                     b < a || (!(a < b) && i2 < i1)
-                });
+                };
+                if changed.is_empty() {
+                    pdqsort(&mut indices, |&i1, &i2| gt(i1, i2));
+                } else {
+                    // only the cover and the slack changed since the last
+                    // sort: sort those and merge them into the rest
+                    let mut rest = std::mem::take(&mut merge_buf);
+                    rest.clear();
+                    let mut moved = Vec::with_capacity(changed.len());
+                    for &i in &indices {
+                        if is_changed[i as usize] {
+                            moved.push(i);
+                        } else {
+                            rest.push(i);
+                        }
+                    }
+                    pdqsort(&mut moved, |&i1, &i2| gt(i1, i2));
+                    indices.clear();
+                    let (mut a, mut b) = (0, 0);
+                    while a < rest.len() && b < moved.len() {
+                        if gt(moved[b], rest[a]) {
+                            indices.push(moved[b]);
+                            b += 1;
+                        } else {
+                            indices.push(rest[a]);
+                            a += 1;
+                        }
+                    }
+                    indices.extend_from_slice(&rest[a..]);
+                    indices.extend_from_slice(&moved[b..]);
+                    for &i in &changed {
+                        is_changed[i as usize] = false;
+                    }
+                    changed.clear();
+                    merge_buf = rest;
+                }
                 let mut lambda = maxviolation - continuouscontribution;
                 cover.clear();
                 cover.reserve(indices.len());
@@ -940,6 +984,13 @@ impl Presolve<'_> {
                 }
                 indices.retain(|&i| !(reducedcost[i as usize] <= feastol));
                 indices.push(slackind);
+                is_changed.resize(reducedcost.len(), false);
+                for &ci in cover.iter().chain(std::iter::once(&slackind)) {
+                    if !is_changed[ci as usize] {
+                        is_changed[ci as usize] = true;
+                        changed.push(ci);
+                    }
+                }
             }
 
             let threshold = (maxviolation + feastol).to_f64();

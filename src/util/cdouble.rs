@@ -28,9 +28,16 @@ fn split(a: f64) -> (f64, f64) {
 }
 
 /// y = a2 * b2 - (((x - a1 * b1) - a2 * b1) - a1 * b2), each product fused.
+/// Dekker's product is error-free (y is the exact rounding error of x)
+/// unless the split overflows (|a| or |b| above about 2^995) or the error
+/// underflows; so is one fused multiply-add, which gives the same y where
+/// the CPU has the instruction.
 #[inline]
 fn two_product(a: f64, b: f64) -> (f64, f64) {
     let x = a * b;
+    if crate::util::fma::HW_FMA {
+        return (x, crate::util::fma::product_error(a, b, x));
+    }
     let (a1, a2) = split(a);
     let (b1, b2) = split(b);
     let t = (-a1).mul_add_c(b1, x);

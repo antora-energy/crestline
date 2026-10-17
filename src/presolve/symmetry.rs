@@ -16,7 +16,7 @@
 use crate::mip::clique::{CDom, CliqueTable, CliqueVar};
 use crate::mip::cuts::sort::{partition, pdqsort, pdqsort_branchless};
 use crate::util::disjoint_sets::HighsDisjointSets;
-use crate::util::hash::{pair_hash, sparse_combine32};
+use crate::util::hash::{monomial_m31, pair_hash, sparse_combine32_mono};
 use crate::util::hash_table::HighsHashTable;
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
@@ -765,9 +765,11 @@ pub struct SymmetryDetection {
     first_leave_partition: Vec<i32>,
     best_leave_partition: Vec<i32>,
 
-    vertex_hash: HighsHashTable<i32, u32>,
-    first_leave_graph: HighsHashTable<(i32, i32, u32)>,
-    best_leave_graph: HighsHashTable<(i32, i32, u32)>,
+    vertex_hash: VertexHash,
+    /// monomial_m31(cell) for every cell (vertex position)
+    cell_monomial: Vec<u32>,
+    first_leave_graph: LeafGraph,
+    best_leave_graph: LeafGraph,
 
     first_leave_prefix_len: i32,
     best_leave_prefix_len: i32,
@@ -781,6 +783,70 @@ pub struct SymmetryDetection {
     num_active_cols: i32,
 
     node_stack: Vec<Node>,
+}
+
+/// The C++ vertexHash (a hash table vertex -> u32) as a dense array with
+/// the list of the vertices present: same values and presence, no hashing
+#[derive(Default)]
+struct VertexHash {
+    val: Vec<u32>,
+    present: Vec<bool>,
+    touched: Vec<i32>,
+}
+
+impl VertexHash {
+    #[inline]
+    fn get_or_insert_default(&mut self, v: i32) -> &mut u32 {
+        let i = v as usize;
+        if i >= self.val.len() {
+            self.val.resize(i + 1, 0);
+            self.present.resize(i + 1, false);
+        }
+        if !self.present[i] {
+            self.present[i] = true;
+            self.touched.push(v);
+        }
+        &mut self.val[i]
+    }
+
+    #[inline]
+    fn find(&self, v: i32) -> Option<u32> {
+        let i = v as usize;
+        if i < self.present.len() && self.present[i] {
+            Some(self.val[i])
+        } else {
+            None
+        }
+    }
+
+    fn clear(&mut self) {
+        for &v in &self.touched {
+            self.present[v as usize] = false;
+            self.val[v as usize] = 0;
+        }
+        self.touched.clear();
+    }
+}
+
+/// The C++ set of edges (row cell or vertex, column cell, color) of a
+/// leave's graph, as sorted (row, color) lists by column cell: the same
+/// membership tests, without hashing
+#[derive(Default)]
+struct LeafGraph {
+    cell_start: Vec<u32>,
+    edges: Vec<(i32, u32)>,
+}
+
+impl LeafGraph {
+    #[inline]
+    fn contains(&self, row: i32, col_cell: i32, color: u32) -> bool {
+        let k = col_cell as usize;
+        if k + 1 >= self.cell_start.len() {
+            return false;
+        }
+        let list = &self.edges[self.cell_start[k] as usize..self.cell_start[k + 1] as usize];
+        list.binary_search(&(row, color)).is_ok()
+    }
 }
 
 /// The (u32-hashed) MatrixColumn and MatrixRow keys
@@ -914,7 +980,7 @@ impl SymmetryDetection {
             let cell = self.vertex_to_cell[i];
             for j in self.gstart[i] as usize..self.gend[i] as usize {
                 let (v, c) = self.gedge[j];
-                sparse_combine32(self.vertex_hash.get_or_insert_default(v), cell, c as u64);
+                sparse_combine32_mono(self.vertex_hash.get_or_insert_default(v), self.cell_monomial[cell as usize], c as u64);
             }
             self.mark_cell_for_refinement(cell);
         }
@@ -936,7 +1002,7 @@ impl SymmetryDetection {
                 if self.cell_size(dest_cell) == 1 {
                     continue;
                 }
-                sparse_combine32(self.vertex_hash.get_or_insert_default(v), cell, c as u64);
+                sparse_combine32_mono(self.vertex_hash.get_or_insert_default(v), self.cell_monomial[cell as usize], c as u64);
                 self.mark_cell_for_refinement(dest_cell);
             }
         }
@@ -990,7 +1056,7 @@ impl SymmetryDetection {
     }
 
     fn get_vertex_hash(&self, v: i32) -> u32 {
-        self.vertex_hash.find(&v).copied().unwrap_or(0)
+        self.vertex_hash.find(v).unwrap_or(0)
     }
 
     fn clear_refinement_queue(&mut self) {
@@ -1015,14 +1081,14 @@ impl SymmetryDetection {
             let refine_start = cell_start
                 + partition(
                     &mut self.current_partition[cell_start as usize..cell_end as usize],
-                    |v| vh.find(v).is_none(),
+                    |&v| vh.find(v).is_none(),
                 ) as i32;
             if refine_start == cell_end {
                 continue;
             }
             pdqsort(
                 &mut self.current_partition[refine_start as usize..cell_end as usize],
-                |a, b| vh.find(a).unwrap() < vh.find(b).unwrap(),
+                |&a, &b| vh.find(a).unwrap() < vh.find(b).unwrap(),
             );
 
             if refine_start != cell_start {
@@ -1232,6 +1298,7 @@ impl SymmetryDetection {
 
         self.cell_in_refinement_queue = vec![false; nv];
         self.vertex_to_cell = vec![0; nv];
+        self.cell_monomial = (0..nv as i32).map(monomial_m31).collect();
         self.curr_node_certificate.reserve(nv);
 
         let mut column_set: HighsHashTable<MatrixColumn, i32> = HighsHashTable::new();
@@ -1326,19 +1393,30 @@ impl SymmetryDetection {
         self.current_partition_links[cell_start as usize] = nv as i32;
     }
 
-    fn dump_current_graph(&self) -> HighsHashTable<(i32, i32, u32)> {
-        let mut g = HighsHashTable::new();
+    fn dump_current_graph(&self) -> LeafGraph {
+        let mut t: Vec<(i32, i32, u32)> = Vec::new();
         for i in 0..self.num_col as usize {
             let col_cell = self.vertex_to_cell[i];
             for j in self.gstart[i] as usize..self.gend[i] as usize {
                 let (v, c) = self.gedge[j];
-                g.insert((self.vertex_to_cell[v as usize], col_cell, c), ());
+                t.push((col_cell, self.vertex_to_cell[v as usize], c));
             }
             for j in self.gend[i] as usize..self.gstart[i + 1] as usize {
                 let (v, c) = self.gedge[j];
-                g.insert((v, col_cell, c), ());
+                t.push((col_cell, v, c));
             }
         }
+        t.sort_unstable();
+        t.dedup();
+        let num_cells = t.last().map_or(0, |e| e.0 as usize + 1);
+        let mut g = LeafGraph { cell_start: vec![0; num_cells + 1], edges: Vec::with_capacity(t.len()) };
+        for &(k, _, _) in &t {
+            g.cell_start[k as usize + 1] += 1;
+        }
+        for k in 0..num_cells {
+            g.cell_start[k + 1] += g.cell_start[k];
+        }
+        g.edges.extend(t.iter().map(|&(_, x, c)| (x, c)));
         g
     }
 
@@ -1377,12 +1455,12 @@ impl SymmetryDetection {
 
     /// compareCurrentGraph: Err(cell) names the column cell whose
     /// neighbourhood differs
-    fn compare_current_graph(&self, other: &HighsHashTable<(i32, i32, u32)>) -> Result<(), i32> {
+    fn compare_current_graph(&self, other: &LeafGraph) -> Result<(), i32> {
         for i in 0..self.num_col as usize {
             let col_cell = self.vertex_to_cell[i];
             for j in self.gstart[i] as usize..self.gend[i] as usize {
                 let (v, c) = self.gedge[j];
-                if other.find(&(self.vertex_to_cell[v as usize], col_cell, c)).is_none() {
+                if !other.contains(self.vertex_to_cell[v as usize], col_cell, c) {
                     // a hash collision, rarely: backtrack to where this cell
                     // was targeted
                     return Err(col_cell);
@@ -1390,7 +1468,7 @@ impl SymmetryDetection {
             }
             for j in self.gend[i] as usize..self.gstart[i + 1] as usize {
                 let (v, c) = self.gedge[j];
-                if other.find(&(v, col_cell, c)).is_none() {
+                if !other.contains(v, col_cell, c) {
                     return Err(col_cell);
                 }
             }
