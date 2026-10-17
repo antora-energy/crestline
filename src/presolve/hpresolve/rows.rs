@@ -553,6 +553,7 @@ impl Presolve<'_> {
                                         // rowpositions.erase(begin + x1Cand)
                                         let k = x1_cand as usize;
                                         self.rowpositions.copy_within(k + 1..self.rp_len, k);
+                                        self.rowpos_version += 1;
                                         self.rp_len -= 1;
                                     } else {
                                         self.transform_column(x1, d as f64, b)?;

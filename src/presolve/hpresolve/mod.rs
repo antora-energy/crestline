@@ -473,9 +473,11 @@ pub struct Presolve<'h> {
     /// as the C++ vector's capacity does
     pub(crate) rowpositions: Vec<i32>,
     pub(crate) rp_len: usize,
-    /// counts link and unlink calls: a stored row's positions are unchanged
-    /// while it is
+    /// counts the changes of the matrix's positions, values and column
+    /// integralities: a row's entries are unchanged while it is
     pub(crate) matrix_version: u64,
+    /// counts the stores into (and edits of) rowpositions
+    pub(crate) rowpos_version: u64,
     pub(crate) freeslots: Vec<i32>,
 
     pub(crate) impl_col_lower: Vec<f64>,
@@ -824,6 +826,7 @@ impl Presolve<'_> {
             }
         }
         self.integrality[c] = IMPLICIT_INTEGER;
+        self.matrix_version += 1;
         if row != -1 {
             self.rowsize_impl_int[row as usize] += 1;
         } else {
@@ -986,6 +989,7 @@ impl Presolve<'_> {
 
     /// getRowPositions into rowpositions (in order): storeRow
     pub(crate) fn store_row(&mut self, row: i32) {
+        self.rowpos_version += 1;
         let n = in_order_positions(self.rowroot[row as usize], &self.ar_left, &self.ar_right, &mut self.rowpositions);
         self.rp_len = n;
     }
@@ -1066,6 +1070,7 @@ impl Presolve<'_> {
                 self.implied_row_bounds.remove(row, col, old, &rb!(self));
                 self.implied_dual_row_bounds.remove(col, row, old, &db!(self));
                 self.a_value[p] = sum;
+                self.matrix_version += 1;
                 self.implied_row_bounds.add(row, col, sum, &rb!(self));
                 self.implied_dual_row_bounds.add(col, row, sum, &db!(self));
             }
