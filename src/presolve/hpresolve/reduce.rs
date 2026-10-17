@@ -72,6 +72,7 @@ impl Presolve<'_> {
             let pu = p as usize;
             let val = self.a_value[pu];
             self.a_value[pu] *= scale;
+            self.matrix_version += 1;
             let row = self.a_row[pu] as usize;
             let row_constant = val * constant;
             if self.row_lower[row] != -INF {
@@ -108,6 +109,7 @@ impl Presolve<'_> {
         for j in 0..n {
             let p = self.rowpositions[j];
             self.a_value[p as usize] *= scale;
+            self.matrix_version += 1;
             if self.a_value[p as usize].abs() <= self.opt.small_matrix_value {
                 self.unlink(p);
             }

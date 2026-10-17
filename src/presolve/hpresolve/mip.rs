@@ -10,6 +10,19 @@ use crate::presolve::postsolve::EQ;
 use crate::util::hash::HighsHash;
 use std::collections::BTreeMap;
 
+/// A stored row of dominatedColumns: positions, and per entry the column,
+/// value, the column's integrality and signature (read in sequence instead
+/// of gathered by position and column)
+#[derive(Default)]
+struct RowCache {
+    version: u64,
+    positions: Vec<i32>,
+    cols: Vec<i32>,
+    vals: Vec<f64>,
+    ints: Vec<u8>,
+    sigs: Vec<(u32, u32)>,
+}
+
 /// Counters of dominatedColumns
 struct DomCtx {
     signatures: Vec<(u32, u32)>,
@@ -18,9 +31,9 @@ struct DomCtx {
     num_fixed_cols: i32,
     num_fixed_cols_pred_bnd_analysis: i32,
     num_modified_bnds_pred_bnd_analysis: i32,
-    /// by row: the matrix version when its positions were stored, and the
-    /// positions (columns of the same rows are checked again and again)
-    row_cache: Vec<(u64, Vec<i32>)>,
+    /// by row: the matrix version when it was stored, and its entries
+    /// (columns of the same rows are checked again and again)
+    row_cache: Vec<RowCache>,
 }
 
 impl Presolve<'_> {
@@ -41,17 +54,19 @@ impl Presolve<'_> {
         !(aj > ak + small)
     }
 
-    fn check_domination(&mut self, ctx: &mut DomCtx, scalj: i32, j: i32, scalk: i32, k: i32) -> bool {
+    /// (int_k, sig_k: column k's integrality and signature)
+    #[allow(clippy::too_many_arguments)]
+    fn check_domination(&mut self, ctx: &mut DomCtx, scalj: i32, j: i32, scalk: i32, k: i32, int_k: u8, sig_k: (u32, u32)) -> bool {
         ctx.num_dom_checks += 1;
         let (ju, ku) = (j as usize, k as usize);
-        if self.integrality[ju] == INTEGER && self.integrality[ku] == CONTINUOUS {
+        if self.integrality[ju] == INTEGER && int_k == CONTINUOUS {
             return false;
         }
         let (mut sj_minus, mut sj_plus) = ctx.signatures[ju];
         if scalj == -1 {
             std::mem::swap(&mut sj_plus, &mut sj_minus);
         }
-        let (mut sk_minus, mut sk_plus) = ctx.signatures[ku];
+        let (mut sk_minus, mut sk_plus) = sig_k;
         if scalk == -1 {
             std::mem::swap(&mut sk_plus, &mut sk_minus);
         }
@@ -184,6 +199,8 @@ impl Presolve<'_> {
         bound_implied: bool,
         has_cliques: bool,
         same_var_type: bool,
+        int_k: u8,
+        sig_k: (u32, u32),
     ) -> R {
         let c = col as usize;
         let ku = k as usize;
@@ -198,7 +215,7 @@ impl Presolve<'_> {
             if !try_to_fix {
                 ctx.num_dom_checks_pred_bnd_analysis += 1;
             }
-            if self.check_domination(ctx, direction, col, direction_k, k) {
+            if self.check_domination(ctx, direction, col, direction_k, k, int_k, sig_k) {
                 let current_bound_implied =
                     if direction > 0 { self.is_upper_implied(col) } else { self.is_lower_implied(col) };
                 if try_to_fix
@@ -252,54 +269,78 @@ impl Presolve<'_> {
         let version = self.matrix_version;
         let r = row as usize;
         if ctx.row_cache.len() <= r {
-            ctx.row_cache.resize_with(r + 1, || (u64::MAX, Vec::new()));
+            ctx.row_cache.resize_with(r + 1, || RowCache { version: u64::MAX, ..Default::default() });
         }
-        let e = &mut ctx.row_cache[r];
-        if e.0 == version {
+        let mut e = std::mem::take(&mut ctx.row_cache[r]);
+        if e.version == version {
             // storeRow: the same positions
-            let n = e.1.len();
+            let n = e.positions.len();
             if self.rowpositions.len() < n {
                 self.rowpositions.resize(n, 0);
             }
-            self.rowpositions[..n].copy_from_slice(&e.1);
+            self.rowpositions[..n].copy_from_slice(&e.positions);
             self.rp_len = n;
+            self.rowpos_version += 1;
         } else {
             self.store_row(row);
-            e.0 = version;
-            e.1.clear();
-            e.1.extend_from_slice(&self.rowpositions[..self.rp_len]);
+            e.version = version;
+            e.positions.clear();
+            e.positions.extend_from_slice(&self.rowpositions[..self.rp_len]);
+            e.cols.clear();
+            e.vals.clear();
+            e.ints.clear();
+            e.sigs.clear();
+            for &p in &e.positions {
+                let k = self.a_col[p as usize];
+                e.cols.push(k);
+                e.vals.push(self.a_value[p as usize]);
+                e.ints.push(self.integrality[k as usize]);
+                e.sigs.push(ctx.signatures[k as usize]);
+            }
         }
+        // the cached entries hold while neither the matrix nor rowpositions
+        // changed (a nested reduction may change either)
+        let rowpos_version = self.rowpos_version;
         let only_pred_bnd_analysis = !bound_implied && !has_cliques;
         let n = self.rp_len;
         let c = col as usize;
         let d = direction as f64;
+        let mut res = Ok(());
         for kk in 0..n {
-            let p = self.rowpositions[kk] as usize;
-            let k = self.a_col[p];
+            let cached = self.matrix_version == version && self.rowpos_version == rowpos_version;
+            let (k, ak, int_k, sig_k) = if cached {
+                (e.cols[kk], e.vals[kk], e.ints[kk], e.sigs[kk])
+            } else {
+                let p = self.rowpositions[kk] as usize;
+                let k = self.a_col[p];
+                (k, self.a_value[p], self.integrality[k as usize], ctx.signatures[k as usize])
+            };
             if k == col || self.col_deleted[k as usize] != 0 {
                 continue;
             }
-            let ak = self.a_value[p];
             let ku = k as usize;
-            let same_var_type = (self.integrality[c] != CONTINUOUS && self.integrality[ku] != CONTINUOUS)
-                || (self.integrality[c] != INTEGER && self.integrality[ku] != INTEGER);
+            let same_var_type = (self.integrality[c] != CONTINUOUS && int_k != CONTINUOUS)
+                || (self.integrality[c] != INTEGER && int_k != INTEGER);
             if only_pred_bnd_analysis && !same_var_type {
                 continue;
             }
             if self.check_domination_non_zero(row, d * best_val, d * ak) {
-                self.dom_check_cols(ctx, col, k, direction, 1, bound_implied, has_cliques, same_var_type)?;
-                if self.col_deleted[c] != 0 {
+                res = self.dom_check_cols(ctx, col, k, direction, 1, bound_implied, has_cliques, same_var_type, int_k, sig_k);
+                if res.is_err() || self.col_deleted[c] != 0 {
                     break;
                 }
             }
             if self.col_deleted[ku] == 0 && self.check_domination_non_zero(row, d * best_val, -d * ak) {
-                self.dom_check_cols(ctx, col, k, direction, -1, bound_implied, has_cliques, same_var_type)?;
-                if self.col_deleted[c] != 0 {
+                // (after a reduction, column k's integrality as the C++ reads it)
+                let int_k = if self.matrix_version == version { int_k } else { self.integrality[ku] };
+                res = self.dom_check_cols(ctx, col, k, direction, -1, bound_implied, has_cliques, same_var_type, int_k, sig_k);
+                if res.is_err() || self.col_deleted[c] != 0 {
                     break;
                 }
             }
         }
-        Ok(())
+        ctx.row_cache[r] = e;
+        res
     }
 
     pub(crate) fn dominated_columns(&mut self) -> R {

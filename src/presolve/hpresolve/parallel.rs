@@ -353,6 +353,7 @@ impl Presolve<'_> {
                             self.integrality[dc] != INTEGER && self.integrality[c] == INTEGER;
                         if rowsize_int_reduction {
                             self.integrality[c] = CONTINUOUS;
+                            self.matrix_version += 1;
                         }
                         self.mark_changed_col(col);
                         dec_singleton(self, &mut num_row_singletons, duplicate_col);

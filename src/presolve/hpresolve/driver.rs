@@ -87,6 +87,7 @@ impl<'h> Presolve<'h> {
             rowpositions: Vec::new(),
             rp_len: 0,
             matrix_version: 0,
+            rowpos_version: 0,
             freeslots: Vec::new(),
             impl_col_lower: vec![-INF; nc],
             impl_col_upper: vec![INF; nc],
