@@ -704,6 +704,116 @@ or have no symmetry found (fhnw-binpack4-48) are not helped by this pass.
   the colour refinement leaves no cell of two or more columns and
   detection stops before searching (no log line). Proving infeasibility
   as SCIP does would need another technique, not a faster detection.
+## IPX against the HiGHS 1.15.1 release (2026-10-17)
+
+bench-std's LP suite with `solver=ipm` (docs/benchmarks.md, run
+38939646677) had crest behind the release binary: sgm 3.26 s against
+2.98 (x64) and 3.24 against 3.14 (arm64), with neos-631710 4.9 times
+slower on x64, neos-5049753-cuanza and neos-4763324-toguru about 2,
+neos-4532248-waihi and chromaticindex512-7 about 1.6, and
+irish-electricity's relaxation ending "Unknown" where the release says
+"Optimal".
+
+**Cause: floating-point paths, plus a small per-operation cost.**
+- Not HiPO: the release's MIT static build (the one bench-std runs) is
+  made without it (`HIPO` undefined in its HConfig.h), so `solver=ipm` is
+  IPX there too. The Apache build has HiPO and runs it for `solver=ipm`.
+- Not upstream or fork changes: IPX and basiclu in the pinned fork are
+  v1.15.1's (the fork only added the Rust hooks).
+- Paths. The release is built by gcc: on x86_64 without FMA instructions
+  (generic x86_64), on aarch64 with gcc's contraction; crest fuses where
+  clang does on arm64, also on x86-64-v3. IPX amplifies the last-bit
+  differences into other iteration counts, other crossover work and, on
+  toguru, another outcome (the release's IPM stops at "no progress" after
+  48 iterations and the simplex finishes fast; crest's goes on for 135).
+  Built like the release (`--features "libstdcxx no_fma"`, generic
+  x86_64), crest takes the release's path on 243 of the 249 LPs (run
+  38997054427, x64), solves the same 243 (irish-electricity "Optimal"),
+  and takes 1.023 of its shifted time. Against that build, the default
+  x86-64-v3 crest takes the median instance in the same time (1.002,
+  normalised by the release on the same runner) but has a heavy tail:
+  neos-631710 4.2 (166200 primal crossover pushes after 22 IPM iterations,
+  against 12905 crossover iterations after 25), toguru 2.0, cuanza 1.9,
+  chromaticindex512-7 1.5, waihi and roi5alpha10n8 1.4; sgm 1.038.
+- Per operation, on the same path: 1.023 (x64), most on crossover-heavy
+  LPs (savsched1, neos-3025225, cuanza, waihi: 1.15-1.20), where basiclu's
+  hyper-sparse solves (DFS and triangular solve) and the starting-basis
+  matching ran with bounds checks the C code does not have (M1: 1.22 times
+  the C++'s instructions on savsched1, 1.27 on chromaticindex512-7).
+
+**irish-electricity "Unknown".** On crest's path (and the C++ app's, same
+path) IPX's crossover ends "imprecise", the simplex clean-up of the
+presolved LP is optimal, and after postsolve the dual simplex on the
+original LP stops twice at "possibly dual unbounded" without a proof of
+infeasibility (the step is made taboo), returning with 5 primal
+infeasibilities (max 3e-5) and status Unknown, which the final KKT check
+keeps. On the release's path the same clean-up ends within tolerances and
+the KKT check turns Unknown into Optimal. That is HiGHS behaviour on an
+unlucky path, not a port difference (the no_fma build ends Optimal like
+the release); left as is.
+
+**Landed (same results bit for bit).**
+- The starting-basis matching (`guess_basis`, and `symbolic_invert`'s):
+  cs_augment searches the whole alternating tree again for every column
+  that cannot be matched. A failed search's tree is closed (every row next
+  to its columns is matched inside it), so no later augmenting path can
+  use it: it is now marked dead and skipped. Same matching (a test
+  compares it with plain cs_augment on random matrices). It was 40% of
+  chromaticindex512-7's IPX time.
+- Unchecked indexing (debug-asserted) in the matching, basiclu's `dfs` and
+  `solve_triangular`, and the normal-matrix product, under the invariants
+  of the model (row indices checked at load) and of the factorization.
+
+M1 (loaded, one run each, IPX with crossover, cycles / instructions of
+this branch against main, every case same path): rail507 1.001 / 0.986,
+co-100 0.997 / 0.976, neos-1354092 0.886 / 0.870, neos-960392 0.894 /
+0.879, app1-2 0.984 / 0.843, unitcal_7 0.904 / 0.897, neos-3988577-wolgan
+0.921 / 0.880, chromaticindex512-7 0.633 / 0.750, dispatch 3c1b60d6
+relaxation 0.971 / 0.946.
+
+GitHub runners, bench-std LP suite with `solver=ipm`, this branch against
+main built the same way (x86-64-v3 on x64), all of an instance on one
+runner (run 38999699398): shifted time 0.976 (x64) and 0.981 (arm64) over
+the 242 and 241 LPs both solve, every result the same; chromaticindex1024-7
+and 512-7 0.64-0.71, neos-631710 0.69 (x64) and 0.81 (arm64),
+gfd-schedulen180f7d50m30k18 0.84, nothing slower than 1.03. Dispatch
+suite on two threads (IPX in the root race; one thread never calls it),
+main against this branch, 8 seeds, 180 s (run 39001306423): time 1.003
+(arm64) and 1.008 (x64) over 24 instances, solved 190 -> 190 and 189 ->
+190, gaps and primal integrals within noise (the ramp and lambda models,
+where IPX wins the race, 0.95-0.99; dm_small_windlull 1.28 [0.91, 1.79]
+and 1.08 [0.93, 1.27] is the race's timing noise).
+
+Against the release afterwards (run 39003533706, same suite): x64 sgm
+3.04 s against 2.89, 1.029 on the 242 both solve (was 1.062); arm64 3.05
+against 3.04, 0.995 (was 1.015). The rest is the path tail above
+(neos-631710 3.8 on x64, toguru and cuanza about 2 on both arches) and
+irish-electricity.
+
+**Rejected / not done.**
+- Building crest unfused on x64 to follow the release's paths: the median
+  LP is unchanged (1.002), the tail is a handful of LPs either way, and
+  fused arithmetic is worth 0.95 on MIP and 0.86 on IPX in perf.py (see
+  the Rust-specific pass); not a robust gain.
+- More unchecked indexing in the crossover's ratio tests and updates:
+  under 3% of savsched1's samples (the most crossover-bound LP), left.
+
+**HiPO: not ported.** The release's Apache build (HiPO for `solver=ipm`,
+falling back to IPX when it fails) against its MIT build (IPX), bench-std
+LP suite, one thread, 300 s, run 38997266525 (stopped part way: 121 LPs
+on x64, 33 on arm64): HiPO takes 1.42 (x64) and 1.27 (arm64) of IPX's
+shifted time, median 1.13 and 1.17; it is faster on 15 of 121 and 6 of 33
+(rmatr200-p5 0.3, roi5alpha10n8 and bab2/bab6 about 0.5) and far slower on
+others (sorrell3 12, ns1116954 10-14, physiciansched3-3 6.5, qap15 4). On
+x64 it ends without a status on 3 LPs and at the limit on 1 that IPX
+solves (IPX times out on 1 that HiPO solves). A port would be HiPO's 11600
+lines of C++ plus METIS (8200 lines of C), AMD (3600) and RCM (900), about
+twice IPX (13000), and dense kernels that need tuning per arch. On the
+dispatch models IPX runs only in the two-thread root race (crossover
+included, which HiPO uses too), and wins it only on the lambda and ramp
+models (see `mip_root_lp_ipx` above); one-thread solves never call it. So
+a faster IPM would move a fraction of the root LP on a few models, and
+HiPO is not faster on average.
 
 ## Other platforms
 
