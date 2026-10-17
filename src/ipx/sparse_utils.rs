@@ -58,8 +58,19 @@ pub fn depth_first_search(
 /// matrix A by column jstart. jmatch[i] = j >= 0 if row i is matched to
 /// column j, -1 if unmatched, < -1 if excluded. cheap must hold Ap[0..n-1]
 /// on the first call and be unchanged in between; marked[j] != jstart on
-/// entry. work: size m, work2, work3: size m+1. Returns true if the
-/// matching was extended.
+/// entry, and marked[j] >= -1 on the first call. work: size m, work2,
+/// work3, work4: size m+1. Returns true if the matching was extended.
+///
+/// Unlike cs_augment, a search that fails marks the columns it visited
+/// DEAD (-2) for all later calls: they and the rows matched to them form
+/// a closed alternating tree (every row adjacent to its columns is
+/// matched within it), which no later augmenting path can enter and leave
+/// again, so later searches skip it. That changes no result (the paths
+/// found, jmatch and the return values are cs_augment's), only the work:
+/// without it every failed column searches the whole tree again.
+/// marked[] of the columns in a closed alternating tree (augmenting_path)
+const DEAD: Int = -2;
+
 pub fn augmenting_path(
     jstart: Int,
     ap: &[Int],
@@ -70,13 +81,14 @@ pub fn augmenting_path(
     work: &mut [Int],
     work2: &mut [Int],
     work3: &mut [Int],
+    work4: &mut [Int],
 ) -> bool {
     // istack holds row indices without duplicates.
     // jstack holds jstart and up to m indices from jmatch.
     // pstack holds the corresponding column pointers.
     let m = jmatch.len();
     let ncol = marked.len();
-    assert!(ap.len() > ncol && cheap.len() >= ncol && work.len() >= m && work2.len() > m && work3.len() > m);
+    assert!(ap.len() > ncol && cheap.len() >= ncol && work.len() >= m && work2.len() > m && work3.len() > m && work4.len() > m);
     assert!(ap[ncol] as usize <= ai.len() && (jstart as usize) < ncol);
     // Unchecked indexing below: ap[0..=ncol] are pointers into ai (ap[j] <=
     // ap[j+1] <= ap[ncol]), ai holds rows < m, jmatch columns < ncol (or
@@ -91,6 +103,8 @@ pub fn augmenting_path(
         let istack = work.as_mut_ptr();
         let jstack = work2.as_mut_ptr();
         let pstack = work3.as_mut_ptr();
+        let visited = work4.as_mut_ptr();
+        let mut nvisited = 0usize;
         let jmatch_p = jmatch.as_mut_ptr();
         let marked_p = marked.as_mut_ptr();
         let mut found = false;
@@ -104,6 +118,9 @@ pub fn augmenting_path(
             if *marked_p.add(j) != jstart {
                 // first time j visited in this path
                 *marked_p.add(j) = jstart;
+                debug_assert!(nvisited <= m);
+                *visited.add(nvisited) = j as Int;
+                nvisited += 1;
                 let mut i = 0;
                 let mut p = ix(cheap, j);
                 let pend = ix(ap, j + 1);
@@ -134,7 +151,8 @@ pub fn augmenting_path(
                     continue;
                 }
                 debug_assert!(jm >= 0 && (jm as usize) < ncol);
-                if *marked_p.add(jm as usize) == jstart {
+                let mk = *marked_p.add(jm as usize);
+                if mk == jstart || mk == DEAD {
                     p += 1;
                     continue;
                 }
@@ -152,6 +170,10 @@ pub fn augmenting_path(
             for p in (0..=head).rev() {
                 let p = p as usize;
                 *jmatch_p.add(*istack.add(p) as usize) = *jstack.add(p);
+            }
+        } else {
+            for k in 0..nvisited {
+                *marked_p.add(*visited.add(k) as usize) = DEAD;
             }
         }
         found
