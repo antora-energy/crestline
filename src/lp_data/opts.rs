@@ -589,7 +589,7 @@ options! {
     mip_heuristic_run_graph_lns: bool = true;
     mip_concurrent_helper: bool = true;
     mip_concurrent_crossover: bool = false;
-    mip_root_lp_devex_density: double = 0.3;
+    mip_root_lp_devex_density: double = 0.7;
     mip_graph_lns_cost_perturbation: bool = false;
     mip_root_lp_ipx: bool = false;
     mip_root_lp_effort_from_basis: bool = false;

@@ -857,7 +857,7 @@ pub const RECORDS: &[Meta] = &[
         description: "The dual simplex solving the MIP's first root LP (without a basis) switches from dual steepest edge to Devex pricing once the running density of its steepest edge FTRAN results exceeds this (inf: never); later LP solves start from the weights it leaves",
         bool_default: false,
         int: (0, 0, 0),
-        dbl: (0.0, 0.3, f64::INFINITY),
+        dbl: (0.0, 0.7, f64::INFINITY),
         str_default: "",
     },
     Meta {
