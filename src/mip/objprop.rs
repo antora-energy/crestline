@@ -8,7 +8,7 @@
 //! here and owned by the C++ ObjectivePropagation shell.
 
 use super::domain::{bound_range, max2, Bounds, CBounds, CDomain, CSlice, Ctx, Dom, DomChg, StdVec, LOWER};
-use super::domain::{Reason, INF, REASON_OBJECTIVE, UPPER};
+use super::domain::{Reason, HIGHS_1_15, INF, REASON_OBJECTIVE, UPPER};
 use crate::ffi::sl;
 use crate::util::cdouble::CDouble;
 
@@ -781,7 +781,11 @@ impl<'a> Dom<'a> {
                     largest = max2(largest, -cost[cu]);
                 }
             }
-            tmp_rhs += largest * clique[i].rhs as f64;
+            if HIGHS_1_15 {
+                tmp_rhs += largest * clique[i].rhs as f64;
+            } else {
+                tmp_rhs += CDouble::from(largest) * clique[i].rhs as f64;
+            }
             if clique[i].multiplier != largest {
                 clique[i].multiplier = largest;
                 for j in start..end {
@@ -974,7 +978,12 @@ impl Ctx {
                         if d.obj_bound_hopeless(col, upper, capacity.to_f64(), b, cost) {
                             continue;
                         }
-                        (col, if upper { UPPER } else { LOWER }, (capacity + b * cost) / cost)
+                        let val = if HIGHS_1_15 {
+                            (capacity + b * cost) / cost
+                        } else {
+                            (capacity + CDouble::from(b) * cost) / cost
+                        };
+                        (col, if upper { UPPER } else { LOWER }, val)
                     };
                     if self.check_change_bound(boundtype, col, val, objective) {
                         num_bound_changes += 1;

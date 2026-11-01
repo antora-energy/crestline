@@ -18,7 +18,7 @@
 
 use super::clique::CliqueTable;
 use super::cutpool::CutPool;
-use super::domain::{DomChg, LOWER, UPPER};
+use super::domain::{term_is_zero, DomChg, HIGHS_1_15, LOWER, UPPER};
 use super::pseudocost::Pseudocost;
 use super::search::FracInt;
 use crate::util::cdouble::CDouble;
@@ -123,14 +123,14 @@ pub struct CLpView {
 /// a call). The global domain is the worker's when the parallel lock is
 /// active and the LP has a worker, else the MIP solver's (likewise the
 /// upper limit).
-/// The term val * x of a dual proof moved to its right-hand side with the
-/// global bound that keeps the proof valid (x >= glb for val > 0, x <= gub
+/// The global bound with which a term val * x of a dual proof moves to its
+/// right-hand side, keeping the proof valid (x >= glb for val > 0, x <= gub
 /// for val < 0); None if that bound is infinite
-fn proof_bound_term(val: f64, glb: f64, gub: f64) -> Option<f64> {
+fn proof_bound(val: f64, glb: f64, gub: f64) -> Option<f64> {
     if val < 0.0 {
-        (gub != INF).then(|| val * gub)
+        (gub != INF).then_some(gub)
     } else {
-        (glb != -INF).then(|| val * glb)
+        (glb != -INF).then_some(glb)
     }
 }
 
@@ -1062,13 +1062,21 @@ impl LpRelax {
         for i in 0..lp.v.num_row as usize {
             if row_dual[i] > 0.0 {
                 if lp.row_lower[i] != -INF {
-                    upper -= row_dual[i] * lp.row_lower[i];
+                    if HIGHS_1_15 {
+                        upper -= row_dual[i] * lp.row_lower[i];
+                    } else {
+                        upper -= CDouble::from(row_dual[i]) * lp.row_lower[i];
+                    }
                 } else {
                     row_dual[i] = 0.0;
                 }
             } else if row_dual[i] < 0.0 {
                 if lp.row_upper[i] != INF {
-                    upper -= row_dual[i] * lp.row_upper[i];
+                    if HIGHS_1_15 {
+                        upper -= row_dual[i] * lp.row_upper[i];
+                    } else {
+                        upper -= CDouble::from(row_dual[i]) * lp.row_upper[i];
+                    }
                 } else {
                     row_dual[i] = 0.0;
                 }
@@ -1076,7 +1084,7 @@ impl LpRelax {
         }
         inds.clear();
         vals.clear();
-        let feastol = m.m.feastol;
+        let (feastol, eps) = (m.m.feastol, m.m.epsilon);
         for i in 0..lp.v.num_col as usize {
             let mut sum = CDouble::from(lp.col_cost[i]);
             for j in lp.a_start[i] as usize..lp.a_start[i + 1] as usize {
@@ -1084,15 +1092,21 @@ impl LpRelax {
                 if rd == 0.0 {
                     continue;
                 }
-                sum -= lp.a_value[j] * rd;
+                if HIGHS_1_15 {
+                    sum -= lp.a_value[j] * rd;
+                } else {
+                    sum -= CDouble::from(lp.a_value[j]) * rd;
+                }
             }
             let val = sum.to_f64();
-            if val == 0.0 || (cfg!(feature = "highs_dual_proofs") && val.abs() <= m.m.small_matrix_value) {
+            // HiGHS 1.15.1 dropped any entry below epsilon, strengthening the
+            // proof by up to |val| times the bound (invalid proofs on
+            // traininstance6); PR #3223 drops only terms below epsilon over
+            // the whole domain, the rest move to the right-hand side
+            let zero = if HIGHS_1_15 { val.abs() <= m.m.small_matrix_value } else { term_is_zero(val, glb[i], gub[i], eps) };
+            if zero {
                 continue;
             }
-            // a tiny entry still moves to the right-hand side with its
-            // global bound: dropping it would strengthen the proof (by up to
-            // |val| times the bound, which can cut off feasible points)
             let mut remove = val.abs() <= feastol;
             if !remove && (glb[i] == gub[i] || m.is_continuous(i as i32)) {
                 remove = if val > 0.0 {
@@ -1102,7 +1116,12 @@ impl LpRelax {
                 };
             }
             if remove {
-                upper -= proof_bound_term(val, glb[i], gub[i])?;
+                let b = proof_bound(val, glb[i], gub[i])?;
+                if HIGHS_1_15 {
+                    upper -= val * b;
+                } else {
+                    upper -= sum * b;
+                }
                 continue;
             }
             vals.push(val);
@@ -1158,28 +1177,40 @@ impl LpRelax {
                 if lp.row_upper[ru] == INF {
                     continue;
                 }
-                upper += weight * lp.row_upper[ru];
+                if HIGHS_1_15 {
+                    upper += weight * lp.row_upper[ru];
+                } else {
+                    upper += CDouble::from(weight) * lp.row_upper[ru];
+                }
             } else {
                 if lp.row_lower[ru] == -INF {
                     continue;
                 }
-                upper += weight * lp.row_lower[ru];
+                if HIGHS_1_15 {
+                    upper += weight * lp.row_lower[ru];
+                } else {
+                    upper += CDouble::from(weight) * lp.row_lower[ru];
+                }
             }
             let (inds, vals) = m.row(row);
             for (&j, &v) in inds.iter().zip(vals) {
-                self.row_ap.add_f64(j, weight * v);
+                if HIGHS_1_15 {
+                    self.row_ap.add_f64(j, weight * v);
+                } else {
+                    self.row_ap.add(j, CDouble::from(weight) * v);
+                }
             }
         }
         let (glb, gub) = (m.glb, m.gub);
         let mut ok = true;
         for &i in &self.row_ap.nonzeroinds {
             let iu = i as usize;
-            let val = self.row_ap.get_value(i);
-            if val == 0.0 || (cfg!(feature = "highs_dual_proofs") && val.abs() <= eps) {
+            let exact = self.row_ap.values[iu];
+            let val = exact.to_f64();
+            let zero = if HIGHS_1_15 { val.abs() <= eps } else { term_is_zero(val, glb[iu], gub[iu], eps) };
+            if zero {
                 continue;
             }
-            // tiny entries move to the right-hand side with their global
-            // bound, as in dual_proof
             let mut remove = val.abs() <= feastol;
             if !remove && (glb[iu] == gub[iu] || m.is_continuous(i)) {
                 remove = if val > 0.0 {
@@ -1189,8 +1220,9 @@ impl LpRelax {
                 };
             }
             if remove {
-                match proof_bound_term(val, glb[iu], gub[iu]) {
-                    Some(t) => upper -= t,
+                match proof_bound(val, glb[iu], gub[iu]) {
+                    Some(b) if HIGHS_1_15 => upper -= val * b,
+                    Some(b) => upper -= exact * b,
                     None => {
                         ok = false;
                         break;
@@ -1688,10 +1720,15 @@ mod proof_tests {
     use super::*;
 
     /// A proof 1e-6 x + 1e-10 y <= rhs, with y in [-30000, 30000]: dropping
-    /// the tiny y entry (HiGHS) gives a proof that cuts off a feasible point;
-    /// moving it to the right-hand side with its bound keeps it valid.
+    /// the tiny y entry (HiGHS 1.15.1) gives a proof that cuts off a feasible
+    /// point; moving it to the right-hand side with its bound (PR #3223,
+    /// as the term is not below epsilon over the domain) keeps it valid.
     #[test]
     fn tiny_entries_keep_the_proof_valid() {
+        assert!(!term_is_zero(-1e-10, -30000.0, 30000.0, 1e-9));
+        assert!(term_is_zero(-1e-10, 0.0, 1.0, 1e-9));
+        assert!(!term_is_zero(-1e-10, 0.0, INF, 1e-9));
+        assert!(term_is_zero(0.0, -INF, INF, 1e-9));
         let (a, b) = (1e-6, -1e-10);
         // the valid inequality a x + b y <= rhs at the feasible point
         // x = 10, y = 30000: rhs = a 10 + b 30000
@@ -1699,9 +1736,9 @@ mod proof_tests {
         let rhs = a * x + b * y;
         let dropped = rhs; // a x <= rhs: violated at x = 10
         assert!(a * x > dropped + 1e-12);
-        let folded = rhs - proof_bound_term(b, -30000.0, 30000.0).unwrap();
+        let folded = rhs - b * proof_bound(b, -30000.0, 30000.0).unwrap();
         assert!(a * x <= folded + 1e-15);
-        assert_eq!(proof_bound_term(-1.0, 0.0, INF), None);
-        assert_eq!(proof_bound_term(1.0, -INF, 0.0), None);
+        assert_eq!(proof_bound(-1.0, 0.0, INF), None);
+        assert_eq!(proof_bound(1.0, -INF, 0.0), None);
     }
 }

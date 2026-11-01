@@ -3,6 +3,7 @@
 //! HighsLpAggregator, on a [`SepaRound`].
 
 use super::round::*;
+use crate::mip::domain::{term_is_zero, HIGHS_1_15};
 use crate::util::cdouble::CDouble;
 
 impl SepaRound {
@@ -207,7 +208,19 @@ impl SepaRound {
                     self.vectorsum.add(inds[j], vals[j]);
                 }
             }
-            self.vectorsum.cleanup(|_, val| val.abs() <= small);
+            if HIGHS_1_15 {
+                self.vectorsum.cleanup(|_, val| val.abs() <= small);
+            } else {
+                let mut vs = std::mem::take(&mut self.vectorsum);
+                vs.cleanup(|col, val| {
+                    // the bounds only for the rare entries below epsilon
+                    val.abs() <= small && {
+                        let (lb, ub) = self.bounds(col as usize);
+                        term_is_zero(val, lb, ub, small)
+                    }
+                });
+                self.vectorsum = vs;
+            }
             inds.clear();
             inds.extend_from_slice(&self.vectorsum.nonzeroinds);
             num_nz = inds.len();
@@ -339,7 +352,11 @@ impl SepaRound {
             let (lower, upper) = (self.col_lower, self.col_upper);
             self.vectorsum.cleanup(|col, val| {
                 let absval = val.abs();
-                if absval <= small {
+                if HIGHS_1_15 {
+                    if absval <= small {
+                        return true;
+                    }
+                } else if term_is_zero(val, lower.at(col as usize), upper.at(col as usize), small) {
                     return true;
                 }
                 if absval <= feastol {

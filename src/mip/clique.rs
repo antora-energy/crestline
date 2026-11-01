@@ -25,6 +25,7 @@
 //! `rhs -= val * bound` when extracting cliques from rows.
 
 use crate::mip::cuts::sort::{partition, pdqsort, pdqsort_branchless};
+use crate::mip::domain::{max2, HIGHS_1_15};
 use crate::util::cdouble::CDouble;
 use crate::util::fma::ClangFma;
 use crate::util::hash::Pod;
@@ -2037,12 +2038,20 @@ impl Ctx {
                 if dom.lower(inds[i]) == -INF {
                     return;
                 }
-                minact += vals[i] * dom.lower(inds[i]);
+                if HIGHS_1_15 {
+                    minact += vals[i] * dom.lower(inds[i]);
+                } else {
+                    minact += vals[i] * CDouble::from(dom.lower(inds[i]));
+                }
             } else {
                 if dom.upper(inds[i]) == INF {
                     return;
                 }
-                minact += vals[i] * dom.upper(inds[i]);
+                if HIGHS_1_15 {
+                    minact += vals[i] * dom.upper(inds[i]);
+                } else {
+                    minact += vals[i] * CDouble::from(dom.upper(inds[i]));
+                }
             }
         }
         if rhs - minact < 0.0 {
@@ -2053,13 +2062,28 @@ impl Ctx {
             if !dom.is_integral(inds[i]) {
                 continue;
             }
-            let mut bound_val = ((rhs - minact) / vals[i]).to_f64();
-            if vals[i] > 0.0 {
-                bound_val = (bound_val + dom.lower(inds[i]) + dom.feastol).floor();
-                dom.change_bound(UPPER, inds[i], bound_val, REASON_UNKNOWN, 0);
+            let implied_bound = (rhs - minact) / vals[i];
+            if HIGHS_1_15 {
+                let mut bound_val = implied_bound.to_f64();
+                if vals[i] > 0.0 {
+                    bound_val = (bound_val + dom.lower(inds[i]) + dom.feastol).floor();
+                    dom.change_bound(UPPER, inds[i], bound_val, REASON_UNKNOWN, 0);
+                } else {
+                    bound_val = (bound_val + dom.upper(inds[i]) - dom.feastol).ceil();
+                    dom.change_bound(LOWER, inds[i], bound_val, REASON_UNKNOWN, 0);
+                }
             } else {
-                bound_val = (bound_val + dom.upper(inds[i]) - dom.feastol).ceil();
-                dom.change_bound(LOWER, inds[i], bound_val, REASON_UNKNOWN, 0);
+                // PR #3223 (#2874 problem 4): a tolerance of at least
+                // epsilon / |coefficient|, as the row may have been scaled
+                // down a lot
+                let bound_tol = max2(dom.feastol, mip.epsilon / vals[i].abs());
+                if vals[i] > 0.0 {
+                    let bound_val = (implied_bound + dom.lower(inds[i]) + bound_tol).to_f64().floor();
+                    dom.change_bound(UPPER, inds[i], bound_val, REASON_UNKNOWN, 0);
+                } else {
+                    let bound_val = (implied_bound + dom.upper(inds[i]) - bound_tol).to_f64().ceil();
+                    dom.change_bound(LOWER, inds[i], bound_val, REASON_UNKNOWN, 0);
+                }
             }
             if dom.infeasible() {
                 return;
@@ -2083,7 +2107,11 @@ impl Ctx {
                         continue;
                     }
                     if vals[pj] > 0.0 {
-                        let mut implcolub = (implied_activity + vals[pj] * dom.lower(col)).to_f64() / vals[pj];
+                        let mut implcolub = if HIGHS_1_15 {
+                            (implied_activity + vals[pj] * dom.lower(col)).to_f64() / vals[pj]
+                        } else {
+                            ((implied_activity + vals[pj] * CDouble::from(dom.lower(col))) / vals[pj]).to_f64()
+                        };
                         if dom.is_integral(col) {
                             implcolub = (implcolub + mip.feastol).floor();
                         }
@@ -2102,7 +2130,11 @@ impl Ctx {
                             mip.add_vub(col, bincol, coef, constant);
                         }
                     } else {
-                        let mut implcollb = (implied_activity + vals[pj] * dom.upper(col)).to_f64() / vals[pj];
+                        let mut implcollb = if HIGHS_1_15 {
+                            (implied_activity + vals[pj] * dom.upper(col)).to_f64() / vals[pj]
+                        } else {
+                            ((implied_activity + vals[pj] * CDouble::from(dom.upper(col))) / vals[pj]).to_f64()
+                        };
                         if dom.is_integral(col) {
                             implcollb = (implcollb - mip.feastol).ceil();
                         }
