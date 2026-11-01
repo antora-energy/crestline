@@ -19,10 +19,12 @@ Sources (one job = one model):
               truncate the horizon (time-indexed names) to 30-100% (perturb)
 On each model: crest with default options and with one variant drawn from the key
 (VARIANTS), the HiGHS release and SCIP, at mip_rel_gap 0 (random, check) or 1e-6,
-time limit TL by source. Flags on crest (the references are trusted until triage):
+time limit TL by source. A solution is evidence against another solver only if it is
+polished: its integers rounded and fixed, the rest re-solved as an LP to 1e-10 (polish).
+Flags on crest:
   WRONG_STATUS       crest infeasible/unbounded and a reference has a solution, or
                      crest has one and a reference (or MIPLIB) proved infeasibility
-  DUAL_PAST_OPT      crest's dual bound beyond a reference's (or MIPLIB's) objective
+  DUAL_PAST_OPT      crest's dual bound beyond a polished reference's (or MIPLIB's) objective
   PRIMAL_PAST_BOUND  crest's objective beyond a reference's dual bound
   BAD_SOLUTION       crest's solution file breaks bounds, integrality or rows by more
                      than 1e-6 (absolute, as HiGHS), or its objective is not the reported one
@@ -286,7 +288,8 @@ def solve(solver, binary, path, opts, tl, gap, lp, tmp):
         v = verify(lp, sol)
         r['viol'] = v and [float(f'{x:.3g}') for x in v[:3]] + [float(f'{abs(v[3] - r["primal"]) / max(1, abs(v[3])):.3g}')]
         r['valid'] = bool(v) and max(r['viol']) <= 1e-6
-        r['strict'] = bool(v) and max(r['viol']) <= 1e-7  # evidence against another solver
+        if r['valid']:  # evidence against another solver
+            r['polished'] = polish(lp, v[4])
     return r
 
 
@@ -315,18 +318,35 @@ def verify(lp, sol):
     viol = lambda v, lo, up: float(np.max(np.maximum(np.maximum(lo - v, v - up), 0), initial=0))  # absolute, as HiGHS
     isint = np.array([int(t) == 1 for t in lp.integrality_], bool) if len(lp.integrality_) else np.zeros(lp.num_col_, bool)
     return (viol(x, np.array(lp.col_lower_), np.array(lp.col_upper_)), viol(act, np.array(lp.row_lower_), np.array(lp.row_upper_)),
-            float(np.max(np.abs(x - np.round(x))[isint], initial=0)), float(np.array(lp.col_cost_) @ x + lp.offset_))
+            float(np.max(np.abs(x - np.round(x))[isint], initial=0)), float(np.array(lp.col_cost_) @ x + lp.offset_), x)
+
+
+def polish(lp, x):
+    """the objective of x's integers, rounded and fixed, with the continuous part re-solved as an LP to 1e-10,
+    or None if that LP is infeasible: a solution feasible only within tolerance is no evidence"""
+    isint = np.array([int(t) == 1 for t in lp.integrality_], bool) if len(lp.integrality_) else np.zeros(lp.num_col_, bool)
+    h = highspy.Highs()
+    h.setOptionValue('output_flag', False)
+    h.passModel(lp)
+    j = np.flatnonzero(isint).astype(np.int32)
+    if len(j):
+        h.changeColsBounds(len(j), j, np.round(x[j]), np.round(x[j]))
+        h.changeColsIntegrality(len(j), j, np.zeros(len(j), dtype=np.uint8))
+    for o, v in (('presolve', 'off'), ('primal_feasibility_tolerance', 1e-10), ('time_limit', 60.0)):
+        h.setOptionValue(o, v)
+    h.run()
+    return h.getInfo().objective_function_value if h.getModelStatus() == highspy.HighsModelStatus.kOptimal else None
 
 
 def flags(x, others, s, known):
     """flags on result x against the others' verified solutions and MIPLIB's (kind, value); s = +1 minimize, -1 maximize"""
     tol = lambda z: 1e-6 * max(1, abs(z))
-    prim = [s * q['primal'] for q in others if q.get('strict')] + ([s * known[1]] if known and known[0] in ('opt', 'best') else [])
+    prim = [s * q['polished'] for q in others if q.get('polished') is not None] + ([s * known[1]] if known and known[0] in ('opt', 'best') else [])
     st, f = x['status'], []
     if st in ('error', 'killed'):
         return ['CRASH']
     if st == 'optimal' and x['primal'] is None or st == 'infeasible' and prim or \
-            st in NOSOL[1:] and (any(q['status'] == 'optimal' and q.get('strict') for q in others) or known and known[0] == 'opt'):
+            st in NOSOL[1:] and (any(q['status'] == 'optimal' and q.get('polished') is not None for q in others) or known and known[0] == 'opt'):
         f.append('WRONG_STATUS')
     d = x['dual'] if x['dual'] is not None else x['primal'] if st == 'optimal' else None
     if d is not None and prim and s * d - min(prim) > tol(min(prim)):
@@ -414,7 +434,7 @@ def report(a):
 
 
 def selftest():
-    q = lambda st, p, d, ok=True: dict(solver='x', status=st, primal=p, dual=d, valid=ok, strict=ok)
+    q = lambda st, p, d, ok=True: dict(solver='x', status=st, primal=p, dual=d, valid=ok, polished=p if ok else None)
     c = q('optimal', 10.0, 10.0)
     assert flags(c, [q('optimal', 10.0, 10.0)], 1, None) == []
     assert flags(q('optimal', 11.0, 11.0), [q('optimal', 10.0, 10.0)], 1, None) == ['DUAL_PAST_OPT(1.0e-01)']
@@ -439,7 +459,9 @@ def selftest():
             h.run()
             if h.getModelStatus() == highspy.HighsModelStatus.kOptimal:
                 v = verify(h.getLp(), f'{d}/m.sol')
-                assert max(v[:3]) <= 1e-6 and abs(v[3] - h.getInfo().objective_function_value) < 1e-6 * max(1, abs(v[3])), (seed, v)
+                z = h.getInfo().objective_function_value
+                assert max(v[:3]) <= 1e-6 and abs(v[3] - z) < 1e-6 * max(1, abs(v[3])), (seed, v)
+                assert seed % 6 != 0 or abs(polish(h.getLp(), v[4]) - z) <= 1e-9 * abs(z)  # knapsack: all integer
     print('ok')
 
 
