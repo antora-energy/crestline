@@ -740,6 +740,74 @@ within 0.2 s):
 The helper thread uses a second core better than a seed race does, and
 `hard_10-03_1340` reaches 1% in none of these.
 
+## Per-bank Lagrangian decomposition (measured, not implemented, 2026-11-01)
+
+The idea: dualize the rows that link banks, so that the rest splits into
+one small MIP per bank. If those MIPs lack the integrality property, the
+Lagrangian dual beats the LP bound (it equals the LP over each bank's
+convex hull). The block solutions could also seed a heuristic that
+switches many banks at once. Prototyped offline in Python (highspy, HiGHS
+1.x MIP for the blocks).
+
+**Structure (from the names).** On `hard_10-03_1340`: 28 bank blocks, one
+system block (columns and rows touching no bank), and 110 coupling rows,
+two equality rows per period over 55 periods. Every other row touches a
+single block.
+
+**Gate: no integrality property.** At the root LP's duals for the 110
+rows, each bank block solved as an LP and as a MIP. The LP values sum
+back to the LP bound exactly. 19-23 of the 28 bank MIPs are worse than their
+LPs, so the Lagrangian bound L(y_LP) is above the LP bound:
+
+| | LP bound | L(y_LP) | crest bound at 180 s, 1% gap, 1 / 2 threads |
+|---|---|---|---|
+| `hard_10-03_1340` | -253985 | -251234 | -251530 / -251515 |
+| `diverse_10-01_0052` | -251794 | -249946 | -250205 / -250182 |
+| `tick_1018_0340` | -379801 | -374947 | -376799 / -376684 |
+| `ovn_0636_g147` | -194058 | -193863 | -193000 / -192979 |
+
+(L is the sum of the block MIPs' dual bounds, so valid even where a block
+hit its time limit.) It beats crest's 180 s bound on three of the four,
+by 0.1% on `hard_10-03` and `diverse_10-01` and 0.5% on `tick_1018_0340`,
+and is 0.45% weaker on `ovn_0636_g147`, where crest's cuts gain more than
+the per-bank hulls do. With crest's own 180 s incumbents, the better of
+the two bounds would certify `diverse_10-01` at one thread (0.998%,
+against 1.10%) and `tick_1018_0340` at two threads (0.93%, against
+1.40%); `hard_10-03` stays above 1% (1.20% and 1.28%).
+
+**The dual does not climb from there.** A subgradient method (Polyak
+steps toward the best known value, block MIPs capped at 20 s) ran 6
+iterations on `hard_10-03` without improving on L(y_LP); the noise of
+time-capped block MIPs is larger than its steps.
+
+**Too slow for 180 s.** The block MIPs are not easy: on `hard_10-03` they
+take 1-120 s each, and one evaluation of L costs 6-20 CPU minutes on the
+M1 (three evaluations in parallel). Capping the blocks gives up the
+bound: at 5 s per block L(y_LP) is -251762 and at 20 s -251527, both
+weaker than crest's. A bank block holds several continuous storage
+modules, so a dynamic program over one state does not apply.
+
+**Primal side: no go.** At y_LP the blocks charge independently, and
+their switch patterns do not fit together:
+- all switches fixed at the block solutions: infeasible;
+- only the switches the blocks leave off fixed (the rest free), solved
+  for 60 s: -244456, against crest's -248252 at 180 s;
+- crest from the block solution as a start (1% gap, one thread, 180 s):
+  it repairs the start to -244877 at 57 s and ends at -246977, against
+  -248252 without it; the time spent also costs bound (-251973).
+Near optimal multipliers many banks are indifferent between charging
+and not, so the block solutions break ties arbitrarily; recovering a
+primal schedule from them is the coordination problem graph LNS already
+works on.
+
+**What building it would take.** A per-bank hull bound pays on the
+bound-limited ticks only if each bank's MIP solves in about a second.
+That needs a specialized block solver (not a general MIP per bank per
+iteration), then separating the hull's cuts into crest's root (Lagrangian
+or Benders-style block cuts) so they combine with crest's own cuts
+rather than replacing them (on `ovn_0636_g147` crest's cuts are worth
+more). Not attempted.
+
 ## Tried and rejected
 
 - Devex pricing for the LNS LPs: cheaper per iteration on dense ramp LPs,
@@ -774,3 +842,6 @@ The helper thread uses a second core better than a seed race does, and
 - A trust region sub-MIP around a MIP start that cannot be completed
   (`mip_start_trust_radius`): 2.4-3.5 times the time to 1% of the best
   known (see "Warm starts" above).
+- A per-bank Lagrangian decomposition: a better bound on three of four
+  ticks but 6-20 CPU minutes per evaluation, and no usable schedules (see
+  above).
