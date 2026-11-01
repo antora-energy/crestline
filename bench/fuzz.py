@@ -337,6 +337,8 @@ def flags(x, others, s, known):
 
 
 def run(a):
+    for k in ('crest', 'highs', 'check_dir', 'dispatch_dir', 'cache'):  # the solvers run in --tmp
+        setattr(a, k, os.path.abspath(getattr(a, k)))
     os.makedirs(a.cache, exist_ok=True)
     tmp = os.path.abspath(a.tmp)
     os.makedirs(tmp, exist_ok=True)
@@ -347,8 +349,11 @@ def run(a):
         for src, key in js:
             try:
                 job(a, src, key, tmp, out)
-            except Exception as e:  # the type only: a dispatch model's names are private
+            except Exception as e:  # dispatch: the type only, its names are private
+                import traceback
                 print(f'{src} {key}: harness error {type(e).__name__}', flush=True)
+                if src != 'dispatch':
+                    traceback.print_exc(file=sys.stdout)
 
 
 def job(a, src, key, tmp, out):
