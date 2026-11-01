@@ -181,7 +181,7 @@ def parse(solver, out, wall):
                     primal=primal, dual=dual, traj=traj)
 
 
-def scip_solve(inst, tl, threads):
+def scip_solve(inst, tl, threads, gap=1e-4, sol=None):
     """one SCIP solve (pyscipopt), its result as the last JSON line"""
     from pyscipopt import Model, Eventhdlr, SCIP_EVENTTYPE
     t0, traj = time.perf_counter(), []
@@ -196,12 +196,14 @@ def scip_solve(inst, tl, threads):
     m = Model()
     m.hideOutput()
     m.setParam('limits/time', float(tl))
-    m.setParam('limits/gap', 1e-4)
+    m.setParam('limits/gap', float(gap))
     m.setParam('parallel/maxnthreads', int(threads))
     m.includeEventhdlr(Best(), 'best', 'best solutions')
     m.readProblem(inst)
     m.optimize()
     st = m.getStatus()
+    if sol and m.getNSols():
+        m.writeBestSol(sol)
     print(json.dumps(dict(raw=st, primal=m.getObjVal() if m.getNSols() else None,
                           dual=num(m.getDualbound()), traj=traj, nodes=m.getNNodes(), ver=f'SCIP {m.version()}')))
 
@@ -445,6 +447,8 @@ if __name__ == '__main__':
     s.add_argument('inst')
     s.add_argument('tl')
     s.add_argument('threads')
+    s.add_argument('gap', nargs='?', default=1e-4)
+    s.add_argument('sol', nargs='?')
     sp.add_parser('selftest')
     a = ap.parse_args()
-    {'run': run, 'report': report, 'scip': lambda a: scip_solve(a.inst, a.tl, a.threads), 'selftest': lambda a: selftest()}[a.cmd](a)
+    {'run': run, 'report': report, 'scip': lambda a: scip_solve(a.inst, a.tl, a.threads, a.gap, a.sol), 'selftest': lambda a: selftest()}[a.cmd](a)
