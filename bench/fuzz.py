@@ -10,7 +10,8 @@
 
 Sources (one job = one model):
   random:N    N random small MIPs (seed = key): knapsacks, set covers, big-M fixed
-              charge, general MIPs with coefficients over 1e-9..1e6 and bounds to 1e6
+              charge, general MIPs with coefficients over 1e-9..1e6 and bounds to 1e6,
+              and general MIPs scaled like the dispatch models, with big-M rows
   check       the .mps models of HiGHS's check/instances (--check-dir), less QPs
   miplib      the MIPLIB 2017 collection instances tagged easy, <= 20k nonzeros (249)
   dispatch:N  N perturbations per private dispatch model (--dispatch-dir/*.mps.gz):
@@ -24,7 +25,7 @@ time limit TL by source. Flags on crest (the references are trusted until triage
   DUAL_PAST_OPT      crest's dual bound beyond a reference's (or MIPLIB's) objective
   PRIMAL_PAST_BOUND  crest's objective beyond a reference's dual bound
   BAD_SOLUTION       crest's solution file breaks bounds, integrality or rows by more
-                     than 1e-6 (x max(1, |bound|)), or its objective is not the reported one
+                     than 1e-6 (absolute, as HiGHS), or its objective is not the reported one
   CRASH              crest died on a signal, panicked or printed no status
 and the same on the HiGHS release against SCIP as `highs:` notes (inherited bugs).
 Results hold names, seeds, options, statuses, objectives, bounds, violation sizes and
@@ -117,10 +118,10 @@ def write_lp(out, cost, lo, up, isint, rows, sense):
 
 
 def rand_model(seed, out):
-    """a small random MIP; family seed % 5"""
+    """a small random MIP; family seed % 6"""
     r = np.random.default_rng(seed)
     lu = lambda lo, hi, k=None: 10 ** r.uniform(lo, hi, k)  # log-uniform
-    fam, sense = seed % 5, 1
+    fam, sense = seed % 6, 1
     if fam == 0:  # multi-dimensional knapsack, maximize
         n, m = r.integers(10, 50), r.integers(1, 5)
         ub = r.choice([1, 1, 3, 10], n)
@@ -149,7 +150,8 @@ def rand_model(seed, out):
         for row in rows:
             if r.random() < .3:
                 row[2][int(r.integers(n))] = float(r.choice([-1, 1]) * lu(-9, -6))
-    else:  # general MIP, coefficients over 1e-9..1e6; family 4 stresses tiny coefficients on huge bounds
+    else:  # general MIP, coefficients over 1e-9..1e6; family 4 stresses tiny coefficients on huge bounds,
+        # family 5 is scaled like the dispatch models (coefficients 3e-3..1e2, no tiny ones) with big-M rows
         n, m = r.integers(8, 40), r.integers(4, 30)
         big = 6 if fam == 4 else 3
         kind = r.integers(0, 4, n)  # binary, small int, wide int, continuous
@@ -158,19 +160,25 @@ def rand_model(seed, out):
         isint = list(kind < 3)
         x0 = lo + (up - lo) * r.random(n)
         x0 = np.where(kind < 3, np.round(x0), x0)
-        ptiny = .3 if fam == 4 else .15
+        ptiny, phuge, coef = (.3, .1, (-2, 2)) if fam == 4 else (.15, .1, (-2, 2)) if fam == 3 else (0, 0, (-2.5, 2))
         rows = []
+        if fam == 5:  # big-M indicators x_j <= M y_k, M 1-100 times x_j's bound (x0 kept feasible: y_k = 1)
+            for j in np.flatnonzero(kind == 3)[:6]:
+                if (kind == 0).any():
+                    k = int(r.choice(np.flatnonzero(kind == 0)))
+                    x0[k] = 1
+                    rows.append((-INF, 0.0, {int(j): 1.0, k: -float(max(up[j], 1) * lu(0, 2))}))
         for _ in range(m):
             js = r.choice(n, r.integers(2, min(8, n) + 1), replace=False)
-            a = {int(j): float(r.choice([-1, 1]) * (lu(-9, -5) if r.random() < ptiny else lu(4, 6) if r.random() < .1 else lu(-2, 2))) for j in js}
+            a = {int(j): float(r.choice([-1, 1]) * (lu(-9, -5) if r.random() < ptiny else lu(4, 6) if r.random() < phuge else lu(*coef))) for j in js}
             act = sum(v * x0[j] for j, v in a.items())
             sl = r.exponential() * max(1, abs(act)) * .1 * (r.random() < .7)
-            t = r.integers(0, 4)
+            t = r.integers(0, 4 if (kind[js] == 3).any() else 3)  # an all-integer equality holds only within tolerance
             rows.append(((act - sl, INF), (-INF, act + sl), (act, act), (act - sl, act + sl + 1))[t] + (a,))
         if r.random() < .1:  # maybe infeasible
             l0, u0, a = rows[0]
             rows[0] = (u0 + 1, INF, a) if u0 < INF else (-INF, l0 - 1, a)
-        cost = list(r.choice([-1, 1], n) * np.where(r.random(n) < .1, lu(-9, -6, n), lu(-2, 2, n)))
+        cost = list(r.choice([-1, 1], n) * np.where(r.random(n) < (fam < 5) * .1, lu(-9, -6, n), lu(-2, 2, n)))
         lo, up = list(lo), list(up)
         sense = int(r.choice([-1, 1]))
     write_lp(out, cost, lo, up, isint, rows, sense)
@@ -304,8 +312,7 @@ def verify(lp, sol):
     rows, cols = (outer, inner) if A.format_ == highspy.MatrixFormat.kRowwise else (inner, outer)
     act = np.zeros(lp.num_row_)
     np.add.at(act, rows, np.array(A.value_) * x[cols])
-    viol = lambda v, lo, up: float(np.max(np.maximum(np.maximum(lo - v, v - up), 0) /
-                                          np.maximum(1, np.minimum(np.abs(np.where(v < lo, lo, up)), INF)), initial=0))
+    viol = lambda v, lo, up: float(np.max(np.maximum(np.maximum(lo - v, v - up), 0), initial=0))  # absolute, as HiGHS
     isint = np.array([int(t) == 1 for t in lp.integrality_], bool) if len(lp.integrality_) else np.zeros(lp.num_col_, bool)
     return (viol(x, np.array(lp.col_lower_), np.array(lp.col_upper_)), viol(act, np.array(lp.row_lower_), np.array(lp.row_upper_)),
             float(np.max(np.abs(x - np.round(x))[isint], initial=0)), float(np.array(lp.col_cost_) @ x + lp.offset_))
@@ -390,7 +397,7 @@ def report(a):
               f"{sum(bool(r['flags']) for r in x)} | {sum(r['only'] for r in x)} | {len({(r['source'], r['key']) for r in x if r['notes']})} |")
     print('\nCrest flags: ' + (', '.join(f'{k} {v}' for k, v in Counter(kind(f) for r in rs for f in r['flags']).items()) or 'none')
           + f"; crest-only (not shared by the HiGHS release): {sum(r['only'] for r in rs)} solves")
-    print('\nReference notes (default crest rows): ' + (', '.join(f'{k} {v}' for k, v in Counter(f for r in rs if r['opts'] == '' for f in r['notes']).items()) or 'none'))
+    print('\nReference notes (default crest rows): ' + (', '.join(f'{k} {v}' for k, v in Counter(kind(f) for r in rs if r['opts'] == '' for f in r['notes']).items()) or 'none'))
     bad = sorted([r for r in rs if r['flags'] or (r['notes'] and r['opts'] == '')],
                  key=lambda r: (not r['only'], not r['flags'], r['source'], r['key']))[:a.max]
     if bad:
