@@ -889,9 +889,16 @@ impl Presolve<'_> {
                 is_changed[i as usize] = false;
             }
             changed.clear();
+            // the steps can be tiny (~feastol of the violation) and each
+            // adds a slack: a long loop on one row, so the deadline here too
+            let mut rounds: u32 = 0;
             loop {
                 if maxviolation - continuouscontribution <= small_val || indices.is_empty() {
                     break;
+                }
+                rounds += 1;
+                if (rounds & 255) == 0 {
+                    self.check_time_limit()?;
                 }
                 // std::make_pair(rc[i1], i1) > std::make_pair(rc[i2], i2): a
                 // strict total order, so any sort gives pdqsort's order

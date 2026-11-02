@@ -511,6 +511,8 @@ pub struct Presolve<'h> {
 
     pub(crate) shrink_problem_enabled: bool,
     pub(crate) reduction_limit: usize,
+    /// check_limits calls, to read the clock in passes without reductions
+    pub(crate) limit_calls: u32,
 
     pub(crate) singleton_rows: Vec<i32>,
     pub(crate) singleton_columns: Vec<i32>,
@@ -1538,7 +1540,10 @@ impl Presolve<'_> {
     /// checkLimits
     pub(crate) fn check_limits(&mut self) -> R {
         let numreductions = self.ps.num_reductions;
-        if (numreductions & 1023) == 0 {
+        // C++ reads the clock only every 1024 reductions, so a long pass
+        // that makes none never sees the deadline: also every 1024 calls
+        self.limit_calls = self.limit_calls.wrapping_add(1);
+        if (numreductions & 1023) == 0 || (self.limit_calls & 1023) == 0 {
             self.check_time_limit()?;
         }
         if numreductions >= self.reduction_limit {
