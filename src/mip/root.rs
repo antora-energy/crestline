@@ -443,7 +443,10 @@ impl MipData {
                     super::setup::perform_restart(self);
                     self.stop(clk::PERFORM_RESTART);
                     self.sc().num_restarts_root += 1;
-                    if self.modelstatus() == status::NOTSET {
+                    // a concurrent stop or target in the restart's setup ends it early
+                    // without a status, before setupIntCols: the root is not
+                    // evaluated again with the old model's integer columns
+                    if self.modelstatus() == status::NOTSET && !self.concurrent_limit() {
                         self.clock_off();
                         return true;
                     }
@@ -831,7 +834,10 @@ impl MipData {
                             return false;
                         }
                         self.sc().num_restarts_root += 1;
-                        if self.modelstatus() == status::NOTSET {
+                        // a concurrent stop or target in the restart's setup ends it early
+                        // without a status, before setupIntCols: the root is not
+                        // evaluated again with the old model's integer columns
+                        if self.modelstatus() == status::NOTSET && !self.concurrent_limit() {
                             self.clock_off();
                             // (the separator goes out of scope)
                             self.o(op::SEPA_FREE);

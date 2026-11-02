@@ -96,6 +96,18 @@ non-deterministic:
   integer columns where they agree are fixed and the rest solved as a
   sub-MIP.
 
+The time limit reaches every solver of the solve: a sub-MIP (at any depth,
+in the main solver or a helper) gets the smaller of its own budget and its
+parent's remaining time, and a helper the time left when it starts. When
+the main solver ends it stops its helpers and waits for them, so the stop
+also ends the helpers' sub-MIPs (at their next limit check), and presolve,
+which reads the clock only every 1024 reductions in HiGHS, also reads it
+every 1024 limit checks and inside the cover loop of coefficient
+strengthening, where a single row can take millions of rounds. Before
+this (2026-11-02), two solves at 2 threads ran far past their limits (one
+for 2.5 h of a 180 s limit), last seen busy in presolve of sub-MIPs nested
+four deep.
+
 ## When the quick search never searched (`mip_graph_lns_deep_early`)
 
 The deep search's gate reads "the quick search did not improve" as "the

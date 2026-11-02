@@ -322,16 +322,17 @@ impl MipData {
         // SAFETY: the pool of a solver above this sub-MIP, alive during it
         (!self.lns_target.is_null()).then(|| unsafe { &*self.lns_target })
     }
-    /// The pool for a sub-MIP's lns_target_reached_
+    /// The pool for a sub-MIP's lns_target_reached_: a helper's too, so
+    /// that the stop reaches its sub-MIPs (the main solver joins it)
     pub fn sub_mip_lns_target(&self) -> *const Pool {
-        self.own_lns().map_or(self.lns_target, |p| p as *const Pool)
+        self.own_lns().or(self.helper_lns()).map_or(self.lns_target, |p| p as *const Pool)
     }
 
     /// The concurrent bits of checkLimits, in its order
     pub fn concurrent_limit(&self) -> bool {
         self.helper_lns().is_some_and(|p| p.stopped())
             || self.own_lns().is_some_and(|p| p.target_reached())
-            || self.lns_target().is_some_and(|p| p.target_reached())
+            || self.lns_target().is_some_and(|p| p.target_reached() || p.stopped())
     }
 
     /// addIncumbent in a helper: offer the incumbent

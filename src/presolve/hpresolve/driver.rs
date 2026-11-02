@@ -113,6 +113,7 @@ impl<'h> Presolve<'h> {
             eqsize: Vec::new(),
             shrink_problem_enabled: true,
             reduction_limit: usize::MAX,
+            limit_calls: 0,
             singleton_rows: Vec::new(),
             singleton_columns: Vec::new(),
             row_deleted: vec![0; nr],
