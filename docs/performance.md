@@ -1046,6 +1046,14 @@ filter ends Unknown, so HiGHS reports a reducible IIS; crest now finds an
 irreducible one of 50 rows, marked as an expected difference). Rejected: accepting such a solution as optimal at a relative
 tolerance (the residuals are absolute, and 300x the tolerance); the primal
 simplex with its forced phase 2 (above).
+
+Follow-up (2026-11-02): only the fallback's optimum is kept. On a root
+LP relaxation of maxgasflow the phase 1 stopped after 0 iterations on
+2.4e-6 of residual infeasibility and returned Infeasible for a feasible
+LP; the MIP pruned the root and called maxgasflow infeasible, or optimal
+1.1% past its optimum, on some seeds and builds (found by bench/fuzz.py,
+docs/benchmarks.md). Any other result now ends Unknown, as in the C++
+(whose KKT check then finds that LP optimal). Test: tests/unscaled_phase1.rs.
 ## MIPLIB instances where crest loses (2026-10-17)
 
 From the bench-std baseline (docs/benchmarks.md): the instances where
