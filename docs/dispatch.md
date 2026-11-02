@@ -856,6 +856,42 @@ switch_change variant over 60 s at 1 thread, so it was not screened.
 The rule switch alone (keep) costs 7-8%. No full run.
 For the application (Antora): do not add count columns to the model.
 
+## Reduced-cost block seeds (rejected, 2026-11-02)
+
+Graph LNS already seeds a neighbourhood at a column with a promising
+reduced cost at the incumbent (the gain of flipping it alone, from the
+neighbourhood LPs, deep search only). Single flips are rarely feasible on
+dispatch (switch / switch_change chains, state-of-charge links), so the
+candidate scored a column by the signed reduced-cost gain summed over it
+and the decision columns of its short rows (at most four decision
+columns: the chains), also refreshed from the flip search's LP with every
+decision column fixed at the incumbent (the fixed-integer LP). Variant
+`b1`: in the deep search; `b2`: in the quick search too.
+
+Local (instruction clock, 60 s, seeds 0-1, 8 models): no gain; on
+`tick_1018_0340` `b1` ended 0.20 points of gap worse (mean primal gap
++0.066), `b2` reached 1% of the best known 1.03x later over all pairs.
+
+Screen (runs 41448246022, 41448249444; 10 instances, 8 seeds, 120 s), and
+the two ticks (41448265268, 41448268659; 8 seeds, 120 s):
+
+| threads | arch | variant | solved | time ratio | t1 ratio | primal gap B-A |
+|---|---|---|---|---|---|---|
+| 1 | arm64 | b1 | 67 -> 65 | 0.960 | 1.001 | +0.007 ± 0.017 |
+| 1 | arm64 | b2 | 67 -> 64 | 0.960 | 1.010 | +0.010 ± 0.024 |
+| 1 | x64 | b1 | 66 -> 65 | 0.964 | 1.003 | +0.011 ± 0.016 |
+| 1 | x64 | b2 | 66 -> 64 | 0.957 | 1.006 | +0.002 ± 0.030 |
+| 2 | arm64 | b1 | 68 -> 67 | 1.021 | 1.003 | -0.001 ± 0.013 |
+| 2 | arm64 | b2 | 68 -> 68 | 0.992 | 1.011 | -0.012 ± 0.015 |
+| 2 | x64 | b1 | 66 -> 67 | 1.012 | 1.000 | -0.012 ± 0.014 |
+| 2 | x64 | b2 | 66 -> 67 | 1.043 | 1.007 | -0.018 ± 0.015 |
+
+On the ticks (`tick_1018_0340`, `tick_1018_0420`): at 1 thread neither
+is solved by base; `b2` reaches 1% of the best known on `tick_1018_0340`
+1.32-1.34x later. At 2 threads on x64, `b1` solves 14 of 16 (base 16),
+`b2` 15. The time ratio on solved runs at 1 thread is better, at 2
+threads worse; the solved counts fall and t1 does not move: no gain.
+
 ## Tried and rejected
 
 - Devex pricing for the LNS LPs: cheaper per iteration on dense ramp LPs,
@@ -896,3 +932,5 @@ For the application (Antora): do not add count columns to the model.
 - Per-period integer count columns of the switches (a general disjunction
   to branch on): presolve substitutes them out; kept (presolve_rule_off),
   the bound does not move and the incumbents get 4-8% worse (see above).
+- Seeding neighbourhoods by reduced-cost gain summed over short-row
+  chains (see above): fewer solved runs, no 2-thread gain.
