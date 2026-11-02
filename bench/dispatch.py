@@ -48,7 +48,18 @@ def run_one(cfg, inst, seed, a, cpu):
     mac = sys.platform == 'darwin'
     cmd = (['/usr/bin/time', '-l'] if mac else []) + [binary, '--options_file', f.name, inst]
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    out, err = p.communicate()
+    try:
+        out, err = p.communicate(timeout=1.5 * a.tl + 60)
+        hung = False
+    except subprocess.TimeoutExpired:
+        # a hang: print the stacks of all threads (code only, no model data), then kill
+        hung = True
+        if not mac:
+            subprocess.run('command -v gdb || sudo apt-get install -y -qq gdb', shell=True, capture_output=True)
+            print(subprocess.run(['sudo', 'gdb', '-p', str(p.pid), '-batch', '-ex', 'thread apply all bt'],
+                                 capture_output=True, text=True).stdout, file=sys.stderr, flush=True)
+        p.kill()
+        out, err = p.communicate()
     os.unlink(f.name)
     # the last match: completing a MIP start prints a solving report first
     g = lambda pat, s=out: (m[-1] if (m := re.findall(pat, s, re.M)) else None)
@@ -61,7 +72,7 @@ def run_one(cfg, inst, seed, a, cpu):
             traj.append([float(m.group(2)), float(m.group(1))])
     gap = g(r'^  Gap\s+(\S+)%')
     r = dict(cfg=cname, inst=name(inst), seed=seed, arch='arm64' if cpu.startswith('Apple') else platform.machine(), cpu=cpu, tl=a.tl, threads=a.threads,
-             status=g(r'^  Status\s+(.*)$'), primal=num(g(r'^  Primal bound\s+(\S+)')), dual=num(g(r'^  Dual bound\s+(\S+)')),
+             status='hung' if hung else g(r'^  Status\s+(.*)$'), primal=num(g(r'^  Primal bound\s+(\S+)')), dual=num(g(r'^  Dual bound\s+(\S+)')),
              gap=num(gap), pdi=num(g(r'^  P-D integral\s+(\S+)')), time=num(g(r'^  Timing\s+(\S+)')),
              nodes=int(g(r'^  Nodes\s+(\d+)') or 0), lpit=int(g(r'^  LP iterations\s+(\d+)') or 0), traj=traj)
     if mac:
