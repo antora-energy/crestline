@@ -23,6 +23,10 @@ kept in `actions/cache`; none are committed.
 - **highs**: the static `highs` binary of the latest
   [HiGHS release](https://github.com/ERGO-Code/HiGHS/releases) (generic
   x86_64 build);
+- **highs-src**: the same release built from source in the runner as the
+  release binary is (static, gcc), plus crest's target CPU (x86-64-v3 on
+  x86_64, the default on arm64) and LTO: against `highs` it measures the
+  build flags, against `crest` the algorithm alone;
 - **scip**: SCIP from the `pyscipopt` wheel (its bundled SCIP and SoPlex);
 - **cbc**: Ubuntu 24.04's `coinor-cbc` (2.10), off by default (slow).
 
