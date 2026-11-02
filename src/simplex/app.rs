@@ -869,6 +869,15 @@ pub fn solve_lp_simplex(h: &mut CSimplexApp) -> Status {
                 super::primal::NO_FORCED_PHASE2.with(|f| f.set(true));
                 return_status = h.status(OP_SOLVE, 0);
                 super::primal::NO_FORCED_PHASE2.with(|f| f.set(false));
+                // Only an optimum is kept: a phase 1 that stops on residual
+                // infeasibilities of roundoff size (maxgasflow: 2.4e-6 in
+                // all, after 0 iterations) is no proof of infeasibility, and
+                // its "Infeasible" pruned feasible MIP nodes. Otherwise the
+                // C++'s outcome: Unknown, with a warning
+                if return_status != Status::Error && h.lps().sh.model_status != MS_OPTIMAL {
+                    h.lps().sh.model_status = MS_UNKNOWN;
+                    return_status = Status::Warning;
+                }
             }
             solved_unscaled_lp = true;
             if scaled_model_status != MS_OBJECTIVE_BOUND && h.lps().sh.model_status == MS_OBJECTIVE_BOUND {
