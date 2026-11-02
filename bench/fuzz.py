@@ -12,7 +12,7 @@ Sources (one job = one model):
   random:N    N random small MIPs (seed = key): knapsacks, set covers, big-M fixed
               charge, general MIPs with coefficients over 1e-9..1e6 and bounds to 1e6,
               and general MIPs scaled like the dispatch models, with big-M rows
-  check       the .mps models of HiGHS's check/instances (--check-dir), less QPs
+  check       the .mps models of HiGHS's check/instances (--check-dir), less QPs and NaN data
   miplib      the MIPLIB 2017 collection instances tagged easy, <= 20k nonzeros (249)
   dispatch:N  N perturbations per private dispatch model (--dispatch-dir/*.mps.gz):
               costs scaled by 1 +- 3%, bounds loosened 0-3%, init SOC down 0-3%, 3 seeds in 4
@@ -384,6 +384,10 @@ def job(a, src, key, tmp, out):
         print(f'{src} {key}: skipped', flush=True)
         return
     lp = h.getLp()
+    if not all(np.isfinite(v).all() for v in (lp.col_cost_, lp.a_matrix_.value_)) or \
+            np.isnan(np.concatenate([lp.col_lower_, lp.col_upper_, lp.row_lower_, lp.row_upper_])).any():
+        print(f'{src} {key}: skipped (NaN or infinite data)', flush=True)  # check/instances' nan*: HiGHS can hang on them
+        return
     s = int(lp.sense_)
     tl, gap = TL[src], GAP[src]
     var = VARIANTS[zlib.crc32(f'{src}{key}'.encode()) % len(VARIANTS)]
