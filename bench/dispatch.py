@@ -20,6 +20,7 @@ DIR); see starts() and "Warm starts" in docs/dispatch.md.
 import argparse, glob, json, math, os, platform, re, subprocess, sys, tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from dispatch_counts import counts
 
 LOGLINE = re.compile(r'^ ?[A-Za-z ]?\s+\d+\s+\d+\s+\d+\s+[\d.]+%\s+\S+\s+(\S+)\s+.*\s([\d.]+)s$')
 
@@ -42,11 +43,20 @@ def cpu_model():
 
 def run_one(cfg, inst, seed, a, cpu):
     cname, binary, opts = cfg
+    # counts=switch|changes: the model with count columns (bench/dispatch_counts.py),
+    # made in the runner's temp directory and never uploaded
+    cnt = dict(opts).get('counts')
+    opts = [o for o in opts if o[0] != 'counts']
+    if cnt:
+        model = os.path.join(os.environ.get('RUNNER_TEMP', tempfile.gettempdir()), f"{name(inst)}_counts_{cnt}.mps")
+        if not os.path.exists(model):
+            counts(inst, f"{model}.{seed}", cnt == 'changes')
+            os.replace(f"{model}.{seed}", model)
     with tempfile.NamedTemporaryFile('w', suffix='.opts', delete=False) as f:
         f.write(f"threads = {a.threads}\nrandom_seed = {seed}\nmip_rel_gap = {a.gap}\ntime_limit = {a.tl}\n")
         f.writelines(f"{k} = {v.replace('@', os.path.join(a.starts or '', name(inst) + '.sol'))}\n" for k, v in opts)
     mac = sys.platform == 'darwin'
-    cmd = (['/usr/bin/time', '-l'] if mac else []) + [binary, '--options_file', f.name, inst]
+    cmd = (['/usr/bin/time', '-l'] if mac else []) + [binary, '--options_file', f.name, model if cnt else inst]
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     out, err = p.communicate()
     os.unlink(f.name)
