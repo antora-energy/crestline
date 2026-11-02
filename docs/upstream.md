@@ -99,3 +99,30 @@ bound out of a row would need it.
 **Not seen on the dispatch models**: their coefficients lie in
 [5.7e-3, 1.1e2] and their sides below 2e3 (no wrong answer in 216
 perturbed dispatch models), so Crestline leaves this as HiGHS has it.
+
+## Draft, not filed: objective propagation loops forever on an integer column with fractional fixed bounds
+
+**Version.** HiGHS 1.15.1 (`HighsDomain::ObjectivePropagation::propagate`,
+`HighsDomain::checkChangeBound`). `latest` has the same propagation code
+but no longer meets the case: since
+[PR #3272](https://github.com/ERGO-Code/HiGHS/pull/3272) (issue #3271)
+its presolve, which runs for MIPs even with `presolve = off`, rounds the
+bounds of integer columns (`HPresolve::checkOriginalModelBounds`).
+
+**Symptom.** `highs --presolve off` on a model with an integer column
+fixed at 4.5391e-9 that has a positive cost (Crestline's
+`tests/objprop_noop_loop.rs` has a 3-column one) runs forever at 100% CPU
+once feasibility jump finds an incumbent; no time limit stops it.
+
+**Cause.** The objective propagation's loop over continuous-style columns
+computes an upper bound of 0.0999 for the column; `adjustedUb` rounds it
+to 0 and accepts it (0 < ub = 4.5e-9); `changeBound` finds 0 within
+feastol below lb, snaps it back to lb = ub and returns without a change,
+yet `checkChangeBound` returns true. The loop counts that as a bound
+change and repeats with the same capacity, forever.
+
+**Crestline's fix.** `check_change_bound` returns whether the domain
+changed (its change stack grew, or it became infeasible) rather than
+whether the bound was accepted. The objective propagation is the only
+caller that reads the result, so runs that never meet such a no-op are
+unchanged.

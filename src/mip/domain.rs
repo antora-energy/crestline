@@ -2175,8 +2175,14 @@ impl Ctx {
         if !accept {
             return false;
         }
+        // Whether the bound changed, not (as the C++) whether it was accepted:
+        // an integer column fixed at a fractional value within feastol of an
+        // integer (lb = ub = 4.5e-9) accepts ub 0, which changeBound snaps
+        // back to lb, a no-op that kept the objective propagation's loop
+        // going forever (C++ HiGHS 1.15.1 and latest loop too)
+        let before = self.dom().domchgstack.len();
         self.change_bound(DomChg { boundval: bound, column: col as i32, boundtype }, reason);
-        true
+        self.dom().domchgstack.len() != before || self.infeasible()
     }
 
     /// ConflictPoolPropagation::propagateConflict
