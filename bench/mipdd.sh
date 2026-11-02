@@ -18,6 +18,7 @@
 # (a MIP-DD binary; built from MIPDD_SRC, default ~/.cache/mipdd, when
 # missing; needs boost and tbb). Writes INSTANCE_min.mps in the working
 # directory; MIP-DD's rounds are kept in a temporary directory, printed.
+# MIPDD_SOL: a known solution to keep feasible (see below).
 set -u
 ab() { case $1 in /*) echo "$1";; *) echo "$PWD/$1";; esac; }
 BENCH=$(ab "$(dirname "$0")")
@@ -80,16 +81,19 @@ if [ -n "$opts" ]; then cp "$opts" "$work/opts"; else printf 'threads = 1\nrando
 test=("$0" --test "$pred" "$work/opts")
 "${test[@]}" "$work/$name.mps" || { echo "the predicate does not hold on $inst"; exit 1; }
 
-# A reference solution keeps MIP-DD's reductions feasible: the C++ app's,
+# A reference solution keeps MIP-DD's reductions feasible: MIPDD_SOL ("name
+# value" lines, e.g. MIPLIB's .sol less its =obj= line), else the C++ app's,
 # else crest's
-sol=unknown
+sol=${MIPDD_SOL:+$(ab "$MIPDD_SOL")}
 for b in "${HIGHS_BIN:-}" "$CREST"; do
+  [ -n "$sol" ] && break
   [ -n "$b" ] || continue
   (cd "$work" && "$(ab "$b")" --options_file opts --solution_file ref.full "$name.mps" > /dev/null 2>&1)
   if grep -qx Feasible "$work/ref.full" 2>/dev/null; then
     sed -n '/^# Columns/,/^# Rows/p' "$work/ref.full" | sed '1d;$d' > "$work/ref.sol"; sol=$work/ref.sol; break
   fi
 done
+sol=${sol:-unknown}
 
 # nbatches 10, not MIP-DD's 2: its batch adaption needs a solving effort,
 # which a shell predicate does not report

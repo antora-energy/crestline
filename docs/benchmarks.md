@@ -87,6 +87,70 @@ Before either, screen locally on a few models by instruction count
 (`CRESTLINE_INSTR_CLOCK`). A screen that shows no gain, or a loss on any
 motivating tick, ends the experiment: record it in the docs and move on.
 
+## Fuzzing for wrong answers
+
+`bench/fuzz.py` and `.github/workflows/fuzz.yml` look for wrong answers,
+not speed: a wrong status, a dual bound past a feasible solution, or an
+infeasible "solution". Each model is solved by crest twice (default
+options, and one variant drawn from the model's key: presolve off, another
+seed, 2 threads, symmetry off, or the C++ app's paths), by the HiGHS
+release (default options, and the same variant: the *twin*) and by SCIP,
+at `mip_rel_gap` 0 (small models) or 1e-6. Every solution file is checked
+against the model (bounds, integrality, rows; absolute 1e-6, as HiGHS). A
+solution counts as evidence against another solver only once polished:
+its integers rounded and fixed, the rest re-solved as an LP to 1e-10.
+Without that, most flags on badly scaled models are solutions feasible
+only within tolerance (an integer at 4e-8 opening a big-M row, an
+all-integer equality met to 2e-6).
+A flag on crest that its twin does not share is **crest-only**: a port bug
+or a path difference. A flag both share is inherited from HiGHS.
+
+Sources (`--sources`, default `random:2000,check,miplib,dispatch:6`):
+random small MIPs (knapsacks, set covers, big-M fixed charge, general MIPs
+with coefficients over 1e-9..1e6, and general MIPs scaled like the dispatch
+models), the `.mps` models of HiGHS's `check/instances`, the 249 MIPLIB
+2017 collection instances tagged easy with at most 20k nonzeros, and
+perturbed private dispatch models. A dispatch perturbation scales the costs
+by 1 +- 3%, loosens bounds by 0-3%, lowers the initial SOC by 0-3% and, in
+3 seeds of 4, truncates the horizon. It is made in the runner's temp
+directory and never uploaded. Logs and results hold names, keys, options,
+statuses, objectives, bounds, violation sizes and times only.
+
+Run: Actions, fuzz, "Run workflow" (sources, shards, archs, crest ref), or
+push a branch `fuzz-run/*`. The report (run summary, artifact
+`fuzz-results`) counts solves and flags by source and lists the flagged
+models, crest-only first. To reproduce one: `bench/fuzz.py make SOURCE KEY
+model.mps` (a dispatch one stays local), then shrink it with
+`bench/mipdd.sh`. Locally:
+
+    python3 bench/fuzz.py run out.jsonl --crest target/release/crest \
+        --highs path/to/highs --sources random:200 --tmp /tmp/fuzz
+    python3 bench/fuzz.py report out.jsonl
+
+**First campaign** (2026-11-02, crest main f2620a9; runs 41351599623
+on x64 and local runs on arm64):
+
+| source | models | crest solves | crest flagged | of which crest-only |
+|---|---|---|---|---|
+| random (runners) | 2000 | 4000 | 166 | 9 |
+| random (local, polished evidence) | 3000 | 6000 | 187 | 0 |
+| check/instances | 64 | 128 | 0 | 0 |
+| MIPLIB collection, easy, <= 20k nonzeros | 245 | 490 | 7 | 3 |
+| perturbed dispatch | 216 | 432 | 0 | 0 |
+
+Triage: the random flags shared with the HiGHS release are an inherited
+HiGHS weakness with tiny coefficients (docs/upstream.md); the crest-only
+ones there are the same models on another search path (crest's FMA build
+against the release's plain x86_64 build). MIPLIB: two instances whose
+known optimum all three solvers miss by 7e-6 (MIPLIB's value), and two
+crest-only wrong answers, reproduced on Linux and macOS with 16 seeds
+(HiGHS release: 0 of 8 wrong) for maxgasflow (an unscaled LP called
+infeasible, fixed: docs/performance.md, "IPX cleanup"), and
+neos-3083784-nive, where crest's dual bounds of 1304-4980 cross MIPLIB's
+optimum 0. That one is MIPLIB's: it lists no solution, SCIP 10 proves a
+bound of 3446 in 30 min, and "optimal 0" (HiGHS and crest with presolve
+off) uses a binary at 1 - 2.75e-10 in a row with a 1e10 big-M.
+
 ## Baseline
 
 2026-10-16, crest `bench-std` (main 48f6190 + this harness), HiGHS 1.15.1
