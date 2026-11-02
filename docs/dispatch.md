@@ -808,6 +808,54 @@ or Benders-style block cuts) so they combine with crest's own cuts
 rather than replacing them (on `ovn_0636_g147` crest's cuts are worth
 more). Not attempted.
 
+## Per-period count columns (rejected, 2026-11-02)
+
+The idea: the LP spreads a few banks' worth of "on" over many fractional
+banks, so branching on the count N_t = sum_b switch(b_t) (a general
+disjunction) might split it better than any single binary. Every bank
+stays; for each period t the model gets a general integer column
+count_switch(t) in [0, #banks] and the row count_switch(t) - sum_b
+switch(b_t) = 0, objective 0 (a stdlib Python transform of the MPS, by
+column names; the `lambda_*` models have anonymous names and got none).
+Variant: also the count of switch_change. The transform and a `counts=`
+config key of bench/dispatch.py were in commit 83efb0d and are removed.
+
+**Presolve removes the counts.** A count is a column singleton in an
+equation whose bounds the row implies: free column substitution and the
+aggregator take it out, and the presolved model is the original one
+(`hard_10-03_1340`: 25207 rows, 18958 columns either way). Adding counts
+to the model as given is a no-op. To keep them, presolve_rule_off = 4352
+(free column substitution and aggregator off); the screen then has three
+configs: base, keep (the rule switch alone) and counts (counts and the
+rule switch).
+
+**Screen** (10 screen instances plus `tick_1018_0340` and
+`tick_1018_0420`, 8 seeds, 120 s, 96 pairs per architecture; sgm: shifted
+(10 s) geometric mean time ratio against base, the limit if unsolved; gap:
+mean final gap % of pairs not both solved):
+
+| threads | arch | keep: solved, sgm, gap | counts: solved, sgm, gap |
+|---|---|---|---|
+| 1 | arm64 | 67 -> 64, 1.078, 1.27 -> 1.38 | 67 -> 40, 1.887, 1.14 -> 4.18 |
+| 1 | x64 | 67 -> 65, 1.080, 1.28 -> 1.39 | 67 -> 40, 1.911, 1.15 -> 4.15 |
+| 2 | arm64 | 83 -> 81, 1.070, 1.17 -> 1.24 | 83 -> 57, 1.849, 1.06 -> 6.47 |
+| 2 | x64 | 79 -> 74, 1.074, 1.14 -> 1.21 | 79 -> 55, 1.851, 1.05 -> 5.92 |
+
+On the motivating ticks at 2 threads (arm64; mean of 8 seeds):
+
+| instance | base primal / dual | counts primal / dual | solved base -> counts |
+|---|---|---|---|
+| `hard_10-03_1340` | -248247 / -251528 | -235972 / -251584 | 0 -> 0 |
+| `tick_1018_0340` | -372956 / -376664 | -357737 / -376628 | 8 -> 0 |
+| `tick_1018_0420` | -374328 / -378054 | -344671 / -378093 | 8 -> 0 |
+
+The dual bound does not move (within 0.03%); the incumbents get 4-8%
+worse, so the gap grows from about 1% to 3-10%. Locally (`dm_small_pert_s1_ramp`,
+2 threads) counts with the rule switch took 26 s against 5 s, and the
+switch_change variant over 60 s at 1 thread, so it was not screened.
+The rule switch alone (keep) costs 7-8%. No full run.
+For the application (Antora): do not add count columns to the model.
+
 ## Tried and rejected
 
 - Devex pricing for the LNS LPs: cheaper per iteration on dense ramp LPs,
@@ -845,3 +893,6 @@ more). Not attempted.
 - A per-bank Lagrangian decomposition: a better bound on three of four
   ticks but 6-20 CPU minutes per evaluation, and no usable schedules (see
   above).
+- Per-period integer count columns of the switches (a general disjunction
+  to branch on): presolve substitutes them out; kept (presolve_rule_off),
+  the bound does not move and the incumbents get 4-8% worse (see above).
