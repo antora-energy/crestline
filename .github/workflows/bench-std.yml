@@ -14,7 +14,7 @@ on:
       suite:
         description: "miplib (240), miplib-easy (66), mipfeas (233) or lp (miplib)"
       solvers:
-        description: "Comma-separated: crest, highs, scip, cbc (crest,highs,scip); crestX: crest again, with options crestX:K=V"
+        description: "Comma-separated: crest, highs, highs-src (highs built with crest's flags), scip, cbc (crest,highs,scip); crestX: crest again, with options crestX:K=V"
       time_limit:
         description: "Time limit, s (300)"
       threads:
@@ -81,6 +81,19 @@ jobs:
           fi
           cargo build --release --bin crest
           mkdir -p out && cp target/release/crest out/
+      # highs-src: the HiGHS release built as the release binary is
+      # (release-cpack.yml), plus crest's target CPU and LTO, to separate
+      # algorithm from build flags
+      - if: contains(format(',{0},', env.SOLVERS), ',highs-src,')
+        env:
+          TAG: ${{ needs.plan.outputs.highs }}
+        run: |
+          git clone -q --depth 1 -b "$TAG" https://github.com/ERGO-Code/HiGHS hs
+          f=$([ "${{ matrix.arch }}" = x64 ] && echo -march=x86-64-v3 || true)
+          cmake -S hs -B hs/build -DBUILD_STATIC_EXE=ON -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+            -DCMAKE_C_FLAGS="$f" -DCMAKE_CXX_FLAGS="$f" -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc -static-libstdc++"
+          cmake --build hs/build -j4
+          cp hs/build/bin/highs out/highs-src
       - uses: actions/upload-artifact@v4
         with:
           name: crest-${{ matrix.arch }}
@@ -107,7 +120,7 @@ jobs:
         env:
           TAG: ${{ needs.plan.outputs.highs }}
         run: |
-          chmod +x bins/crest
+          chmod +x bins/*
           a=$([ "${{ matrix.arch }}" = x64 ] && echo x86_64 || echo aarch64)
           mkdir highs && curl -sfL --retry 3 "https://github.com/ERGO-Code/HiGHS/releases/download/$TAG/highs-${TAG#v}-$a-linux-gnu-static-mit.tar.gz" | tar xz -C highs
           case ",$SOLVERS," in *,scip,*) pip install -q pyscipopt;; esac
@@ -124,7 +137,7 @@ jobs:
         run: |
           set -f  # SELECT holds globs
           s=; for x in ${SOLVERS//,/ }; do
-            case $x in crest*) s+=$x=bins/crest,;; highs) s+=highs=highs/bin/highs,;; *) s+=$x,;; esac
+            case $x in crest*) s+=$x=bins/crest,;; highs) s+=highs=highs/bin/highs,;; highs-src) s+=highs-src=bins/highs-src,;; *) s+=$x,;; esac
           done
           python3 bench/std.py run results-$ARCH-$SHARD.jsonl --suite "$SUITE" --solvers "$s" --tl "$TIME_LIMIT" \
             --threads "$THREADS" --shard "$SHARD/$SHARDS" ${SELECT:+--select $SELECT} ${OPTIONS:+--opts $OPTIONS}
