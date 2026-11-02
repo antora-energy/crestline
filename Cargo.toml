@@ -29,9 +29,9 @@ no_fma = []
 # Hyper-sparse triangular solves by HiGHS's depth-first search (as the C++)
 # rather than in the dense solve's order (the same results as a dense solve)
 hyper_dfs = []
-# Dual proofs drop coefficients below epsilon outright, as HiGHS does,
-# instead of moving them to the right-hand side with their bound (HiGHS's
-# proofs can then be invalid: docs/performance.md, traininstance6)
+# HiGHS 1.15.1's dual proofs and activity sums (for the CI oracle) instead
+# of HiGHS PR #3223: proofs drop coefficients below epsilon outright, which
+# can make them invalid (docs/upstream.md, traininstance6)
 highs_dual_proofs = []
 # The Rust Highs object, its model file reading (gzip) and the crest binary
 crest = ["dep:flate2"]

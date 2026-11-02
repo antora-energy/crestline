@@ -219,6 +219,8 @@ pub struct Pool {
     pub run_rins: bool,
     pub run_rens: bool,
     pub run_root_reduced_cost: bool,
+    /// the number of helpers (see start_concurrent_lns)
+    helpers: usize,
     /// the crossover, for the main solver's log: 1 running, 2 done (then
     /// the main solver logs it and sets 3)
     crossover_state: AtomicI32,
@@ -279,7 +281,7 @@ impl Pool {
 /// The main solver's helper: the pool and the thread
 pub struct Main {
     pub pool: Arc<Pool>,
-    thread: Option<std::thread::JoinHandle<()>>,
+    threads: Vec<std::thread::JoinHandle<()>>,
 }
 
 impl Drop for Main {
@@ -291,7 +293,7 @@ impl Drop for Main {
             d.attach(None);
         }
         self.pool.stop.store(true, SeqCst);
-        if let Some(t) = self.thread.take() {
+        for t in self.threads.drain(..) {
             let _ = t.join();
         }
     }
@@ -366,6 +368,12 @@ impl MipData {
         if let Some(d) = &det {
             d.attach(Some(0));
         }
+        // from 3 threads on, a helper on each thread but the main solver's,
+        // all sharing the pool, but no more than the physical cores (on
+        // hyperthreads they slow the main solver more than they help it);
+        // with 2 threads or mip_deterministic, one
+        let threads = crate::parallel::num_threads() as usize;
+        let helpers = if threads >= 3 && det.is_none() { (threads.min(physical_cores()) - 1).max(1) } else { 1 };
         let pool = Arc::new(Pool {
             det,
             best: Mutex::new(Best { objective: INF, own_objective: [INF; 2], ..Default::default() }),
@@ -380,6 +388,7 @@ impl MipData {
             run_rins: self.opts.run_rins,
             run_rens: self.opts.run_rens,
             run_root_reduced_cost: self.opts.run_root_reduced_cost,
+            helpers,
             crossover_state: AtomicI32::new(0),
         });
         let sc = self.sc();
@@ -390,29 +399,37 @@ impl MipData {
         // the helper solves a copy of the presolved model from the root
         // basis, with its own random seed, without the heuristics that
         // solve sub-MIPs
-        let data = SendPtr(glue::fns_call_helper_new(self, time_left));
         let run = glue::fns().helper_run;
-        let shared = pool.clone();
-        let thread = std::thread::Builder::new()
-            // a C++ std::thread's stack on Linux (the solve recurses into
-            // sub-MIPs)
-            .stack_size(8 << 20)
-            .spawn(move || {
-                let data = data;
-                if let Some(d) = &shared.det {
-                    d.attach(Some(1));
-                }
-                // SAFETY: the C++ helper run on its data, which it frees;
-                // the pool outlives it (this thread holds a reference)
-                unsafe { run(data.0, Arc::as_ptr(&shared) as *const std::ffi::c_void) };
-                if let Some(d) = &shared.det {
-                    d.done(1);
-                    d.attach(None);
-                }
+        let threads = (0..helpers)
+            .map(|i| {
+                let data = SendPtr(glue::fns_call_helper_new(self, time_left, i as i32));
+                let shared = pool.clone();
+                std::thread::Builder::new()
+                    // a C++ std::thread's stack on Linux (the solve recurses into
+                    // sub-MIPs)
+                    .stack_size(8 << 20)
+                    .spawn(move || {
+                        let data = data;
+                        if let Some(d) = &shared.det {
+                            d.attach(Some(1));
+                        }
+                        // SAFETY: the C++ helper run on its data, which it frees;
+                        // the pool outlives it (this thread holds a reference)
+                        unsafe { run(data.0, Arc::as_ptr(&shared) as *const std::ffi::c_void) };
+                        if let Some(d) = &shared.det {
+                            d.done(1);
+                            d.attach(None);
+                        }
+                    })
+                    .expect("concurrent LNS helper thread")
             })
-            .expect("concurrent LNS helper thread");
-        sc.concurrent_lns = Box::into_raw(Box::new(Main { pool, thread: Some(thread) }));
-        crate::log_user!(self.log, LogType::Info, "Concurrent LNS helper thread started\n");
+            .collect();
+        sc.concurrent_lns = Box::into_raw(Box::new(Main { pool, threads }));
+        if helpers > 1 {
+            crate::log_user!(self.log, LogType::Info, "%d concurrent LNS helper threads started\n", helpers as i32);
+        } else {
+            crate::log_user!(self.log, LogType::Info, "Concurrent LNS helper thread started\n");
+        }
     }
 
     /// stopConcurrentLns
@@ -522,7 +539,9 @@ impl MipData {
         let independent = pool.independent();
         if helper.is_some() {
             let sc = self.sc();
-            pool.helper_lower_bound.store(sc.lower_bound);
+            // with several helpers, the best of their bounds
+            let lb = if pool.helpers > 1 { cmax(sc.lower_bound, pool.helper_lower_bound.load()) } else { sc.lower_bound };
+            pool.helper_lower_bound.store(lb);
             // the helper's bound with its incumbent may close the gap on its
             // own
             if sc.upper_bound < INF && cmax(sc.lower_bound, pool.main_lower_bound.load()) > sc.optimality_limit {
@@ -716,6 +735,25 @@ fn root_cuts_taken(pool: &Pool) -> bool {
     pool.det.as_ref().is_none_or(|d| d.local[0].lock().unwrap().root_cuts)
 }
 
+/// The cores available to this process, counting a core's hyperthreads
+/// once (Linux: its CPUs' sibling lists; elsewhere the logical CPUs)
+fn physical_cores() -> usize {
+    let logical = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let mut cores = std::collections::HashSet::new();
+    for cpu in 0.. {
+        let f = format!("/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list");
+        match std::fs::read_to_string(f) {
+            Ok(siblings) => cores.insert(siblings),
+            Err(_) => break,
+        };
+    }
+    if cores.is_empty() {
+        logical
+    } else {
+        logical.min(cores.len())
+    }
+}
+
 /// std::min / std::max
 fn cmin(a: f64, b: f64) -> f64 {
     if b < a {
@@ -789,6 +827,7 @@ mod tests {
             run_rins: true,
             run_rens: false,
             run_root_reduced_cost: true,
+            helpers: 1,
             crossover_state: AtomicI32::new(0),
         }
     }

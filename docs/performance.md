@@ -1046,6 +1046,14 @@ filter ends Unknown, so HiGHS reports a reducible IIS; crest now finds an
 irreducible one of 50 rows, marked as an expected difference). Rejected: accepting such a solution as optimal at a relative
 tolerance (the residuals are absolute, and 300x the tolerance); the primal
 simplex with its forced phase 2 (above).
+
+Follow-up (2026-11-02): only the fallback's optimum is kept. On a root
+LP relaxation of maxgasflow the phase 1 stopped after 0 iterations on
+2.4e-6 of residual infeasibility and returned Infeasible for a feasible
+LP; the MIP pruned the root and called maxgasflow infeasible, or optimal
+1.1% past its optimum, on some seeds and builds (found by bench/fuzz.py,
+docs/benchmarks.md). Any other result now ends Unknown, as in the C++
+(whose KKT check then finds that LP optimal). Test: tests/unscaled_phase1.rs.
 ## MIPLIB instances where crest loses (2026-10-17)
 
 From the bench-std baseline (docs/benchmarks.md): the instances where
@@ -1282,6 +1290,20 @@ gained fast0507, neos-787933, wachplan); arm64 94 -> 92, 144.2 -> 145.5 s
 (lost csched008, neos-4738912-atrato, sct2; gained fast0507); no wrong
 result either way. A cost of about 1-2% in sgm, taken for a correct
 proof: the old proofs were stronger only because they were invalid.
+
+Replaced (2026-11-01) by the upstream fix, HiGHS PR #3223 (docs/upstream.md):
+entries are dropped only when below epsilon over the whole domain, sums
+use exact products, and extractCliquesFromCut uses a tolerance of at least
+epsilon / |coefficient|. `highs_dual_proofs` now keeps all of 1.15.1's
+arithmetic. Against main: traininstance6 28290 on seeds 0-11 (seed 5 rerun
+without a limit: the 1200 s runs of both builds hit it on a loaded Mac); traininstance2 no
+wrong bound on seeds 0-11 (all at the limit). Dispatch screen, 1 thread
+(run 41314347064): time 0.994 arm64, 1.009 x64, solved 65 -> 67 on both;
+2 threads (run 41314349451): 0.956 arm64, 0.974 x64; no motivating tick
+worse beyond noise. miplib-easy (runs 41314351665 / 41314353998 for main):
+66/66 solved on both arches (main x64 65: neos-1456979 solved again),
+paired shifted time ratio 1.014 arm64 (1.007 without markshare_4_0), x64
+same-CPU pairs 1.015 (0.997 without it); no wrong result.
 
 ## Root LP profile after PR #9; bitmap solves for denser results: rejected (2026-10-24)
 

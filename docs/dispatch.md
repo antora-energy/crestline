@@ -740,6 +740,158 @@ within 0.2 s):
 The helper thread uses a second core better than a seed race does, and
 `hard_10-03_1340` reaches 1% in none of these.
 
+## Per-bank Lagrangian decomposition (measured, not implemented, 2026-11-01)
+
+The idea: dualize the rows that link banks, so that the rest splits into
+one small MIP per bank. If those MIPs lack the integrality property, the
+Lagrangian dual beats the LP bound (it equals the LP over each bank's
+convex hull). The block solutions could also seed a heuristic that
+switches many banks at once. Prototyped offline in Python (highspy, HiGHS
+1.x MIP for the blocks).
+
+**Structure (from the names).** On `hard_10-03_1340`: 28 bank blocks, one
+system block (columns and rows touching no bank), and 110 coupling rows,
+two equality rows per period over 55 periods. Every other row touches a
+single block.
+
+**Gate: no integrality property.** At the root LP's duals for the 110
+rows, each bank block solved as an LP and as a MIP. The LP values sum
+back to the LP bound exactly. 19-23 of the 28 bank MIPs are worse than their
+LPs, so the Lagrangian bound L(y_LP) is above the LP bound:
+
+| | LP bound | L(y_LP) | crest bound at 180 s, 1% gap, 1 / 2 threads |
+|---|---|---|---|
+| `hard_10-03_1340` | -253985 | -251234 | -251530 / -251515 |
+| `diverse_10-01_0052` | -251794 | -249946 | -250205 / -250182 |
+| `tick_1018_0340` | -379801 | -374947 | -376799 / -376684 |
+| `ovn_0636_g147` | -194058 | -193863 | -193000 / -192979 |
+
+(L is the sum of the block MIPs' dual bounds, so valid even where a block
+hit its time limit.) It beats crest's 180 s bound on three of the four,
+by 0.1% on `hard_10-03` and `diverse_10-01` and 0.5% on `tick_1018_0340`,
+and is 0.45% weaker on `ovn_0636_g147`, where crest's cuts gain more than
+the per-bank hulls do. With crest's own 180 s incumbents, the better of
+the two bounds would certify `diverse_10-01` at one thread (0.998%,
+against 1.10%) and `tick_1018_0340` at two threads (0.93%, against
+1.40%); `hard_10-03` stays above 1% (1.20% and 1.28%).
+
+**The dual does not climb from there.** A subgradient method (Polyak
+steps toward the best known value, block MIPs capped at 20 s) ran 6
+iterations on `hard_10-03` without improving on L(y_LP); the noise of
+time-capped block MIPs is larger than its steps.
+
+**Too slow for 180 s.** The block MIPs are not easy: on `hard_10-03` they
+take 1-120 s each, and one evaluation of L costs 6-20 CPU minutes on the
+M1 (three evaluations in parallel). Capping the blocks gives up the
+bound: at 5 s per block L(y_LP) is -251762 and at 20 s -251527, both
+weaker than crest's. A bank block holds several continuous storage
+modules, so a dynamic program over one state does not apply.
+
+**Primal side: no go.** At y_LP the blocks charge independently, and
+their switch patterns do not fit together:
+- all switches fixed at the block solutions: infeasible;
+- only the switches the blocks leave off fixed (the rest free), solved
+  for 60 s: -244456, against crest's -248252 at 180 s;
+- crest from the block solution as a start (1% gap, one thread, 180 s):
+  it repairs the start to -244877 at 57 s and ends at -246977, against
+  -248252 without it; the time spent also costs bound (-251973).
+Near optimal multipliers many banks are indifferent between charging
+and not, so the block solutions break ties arbitrarily; recovering a
+primal schedule from them is the coordination problem graph LNS already
+works on.
+
+**What building it would take.** A per-bank hull bound pays on the
+bound-limited ticks only if each bank's MIP solves in about a second.
+That needs a specialized block solver (not a general MIP per bank per
+iteration), then separating the hull's cuts into crest's root (Lagrangian
+or Benders-style block cuts) so they combine with crest's own cuts
+rather than replacing them (on `ovn_0636_g147` crest's cuts are worth
+more). Not attempted.
+
+## Per-period count columns (rejected, 2026-11-02)
+
+The idea: the LP spreads a few banks' worth of "on" over many fractional
+banks, so branching on the count N_t = sum_b switch(b_t) (a general
+disjunction) might split it better than any single binary. Every bank
+stays; for each period t the model gets a general integer column
+count_switch(t) in [0, #banks] and the row count_switch(t) - sum_b
+switch(b_t) = 0, objective 0 (a stdlib Python transform of the MPS, by
+column names; the `lambda_*` models have anonymous names and got none).
+Variant: also the count of switch_change. The transform and a `counts=`
+config key of bench/dispatch.py were in commit 83efb0d and are removed.
+
+**Presolve removes the counts.** A count is a column singleton in an
+equation whose bounds the row implies: free column substitution and the
+aggregator take it out, and the presolved model is the original one
+(`hard_10-03_1340`: 25207 rows, 18958 columns either way). Adding counts
+to the model as given is a no-op. To keep them, presolve_rule_off = 4352
+(free column substitution and aggregator off); the screen then has three
+configs: base, keep (the rule switch alone) and counts (counts and the
+rule switch).
+
+**Screen** (10 screen instances plus `tick_1018_0340` and
+`tick_1018_0420`, 8 seeds, 120 s, 96 pairs per architecture; sgm: shifted
+(10 s) geometric mean time ratio against base, the limit if unsolved; gap:
+mean final gap % of pairs not both solved):
+
+| threads | arch | keep: solved, sgm, gap | counts: solved, sgm, gap |
+|---|---|---|---|
+| 1 | arm64 | 67 -> 64, 1.078, 1.27 -> 1.38 | 67 -> 40, 1.887, 1.14 -> 4.18 |
+| 1 | x64 | 67 -> 65, 1.080, 1.28 -> 1.39 | 67 -> 40, 1.911, 1.15 -> 4.15 |
+| 2 | arm64 | 83 -> 81, 1.070, 1.17 -> 1.24 | 83 -> 57, 1.849, 1.06 -> 6.47 |
+| 2 | x64 | 79 -> 74, 1.074, 1.14 -> 1.21 | 79 -> 55, 1.851, 1.05 -> 5.92 |
+
+On the motivating ticks at 2 threads (arm64; mean of 8 seeds):
+
+| instance | base primal / dual | counts primal / dual | solved base -> counts |
+|---|---|---|---|
+| `hard_10-03_1340` | -248247 / -251528 | -235972 / -251584 | 0 -> 0 |
+| `tick_1018_0340` | -372956 / -376664 | -357737 / -376628 | 8 -> 0 |
+| `tick_1018_0420` | -374328 / -378054 | -344671 / -378093 | 8 -> 0 |
+
+The dual bound does not move (within 0.03%); the incumbents get 4-8%
+worse, so the gap grows from about 1% to 3-10%. Locally (`dm_small_pert_s1_ramp`,
+2 threads) counts with the rule switch took 26 s against 5 s, and the
+switch_change variant over 60 s at 1 thread, so it was not screened.
+The rule switch alone (keep) costs 7-8%. No full run.
+For the application (Antora): do not add count columns to the model.
+
+## Reduced-cost block seeds (rejected, 2026-11-02)
+
+Graph LNS already seeds a neighbourhood at a column with a promising
+reduced cost at the incumbent (the gain of flipping it alone, from the
+neighbourhood LPs, deep search only). Single flips are rarely feasible on
+dispatch (switch / switch_change chains, state-of-charge links), so the
+candidate scored a column by the signed reduced-cost gain summed over it
+and the decision columns of its short rows (at most four decision
+columns: the chains), also refreshed from the flip search's LP with every
+decision column fixed at the incumbent (the fixed-integer LP). Variant
+`b1`: in the deep search; `b2`: in the quick search too.
+
+Local (instruction clock, 60 s, seeds 0-1, 8 models): no gain; on
+`tick_1018_0340` `b1` ended 0.20 points of gap worse (mean primal gap
++0.066), `b2` reached 1% of the best known 1.03x later over all pairs.
+
+Screen (runs 41448246022, 41448249444; 10 instances, 8 seeds, 120 s), and
+the two ticks (41448265268, 41448268659; 8 seeds, 120 s):
+
+| threads | arch | variant | solved | time ratio | t1 ratio | primal gap B-A |
+|---|---|---|---|---|---|---|
+| 1 | arm64 | b1 | 67 -> 65 | 0.960 | 1.001 | +0.007 ± 0.017 |
+| 1 | arm64 | b2 | 67 -> 64 | 0.960 | 1.010 | +0.010 ± 0.024 |
+| 1 | x64 | b1 | 66 -> 65 | 0.964 | 1.003 | +0.011 ± 0.016 |
+| 1 | x64 | b2 | 66 -> 64 | 0.957 | 1.006 | +0.002 ± 0.030 |
+| 2 | arm64 | b1 | 68 -> 67 | 1.021 | 1.003 | -0.001 ± 0.013 |
+| 2 | arm64 | b2 | 68 -> 68 | 0.992 | 1.011 | -0.012 ± 0.015 |
+| 2 | x64 | b1 | 66 -> 67 | 1.012 | 1.000 | -0.012 ± 0.014 |
+| 2 | x64 | b2 | 66 -> 67 | 1.043 | 1.007 | -0.018 ± 0.015 |
+
+On the ticks (`tick_1018_0340`, `tick_1018_0420`): at 1 thread neither
+is solved by base; `b2` reaches 1% of the best known on `tick_1018_0340`
+1.32-1.34x later. At 2 threads on x64, `b1` solves 14 of 16 (base 16),
+`b2` 15. The time ratio on solved runs at 1 thread is better, at 2
+threads worse; the solved counts fall and t1 does not move: no gain.
+
 ## Tried and rejected
 
 - Devex pricing for the LNS LPs: cheaper per iteration on dense ramp LPs,
@@ -774,3 +926,11 @@ The helper thread uses a second core better than a seed race does, and
 - A trust region sub-MIP around a MIP start that cannot be completed
   (`mip_start_trust_radius`): 2.4-3.5 times the time to 1% of the best
   known (see "Warm starts" above).
+- A per-bank Lagrangian decomposition: a better bound on three of four
+  ticks but 6-20 CPU minutes per evaluation, and no usable schedules (see
+  above).
+- Per-period integer count columns of the switches (a general disjunction
+  to branch on): presolve substitutes them out; kept (presolve_rule_off),
+  the bound does not move and the incumbents get 4-8% worse (see above).
+- Seeding neighbourhoods by reduced-cost gain summed over short-row
+  chains (see above): fewer solved runs, no 2-thread gain.

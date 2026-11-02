@@ -831,6 +831,20 @@ fn compute_delta(val: f64, oldbound: f64, newbound: f64, inf: f64, numinfs: &mut
     }
 }
 
+/// HiGHS 1.15.1's arithmetic in place of HiGHS PR #3223 (merged into
+/// `latest` 2026-10-20): coefficients below epsilon dropped outright, and
+/// several activity sums with rounded products (the cargo feature
+/// `highs_dual_proofs`, for the CI oracle)
+pub(crate) const HIGHS_1_15: bool = cfg!(feature = "highs_dual_proofs");
+
+/// HighsDomain::termIsZero (PR #3223): a term val * x with x in [lb, ub]
+/// may be dropped when it is at most epsilon in size
+#[inline]
+pub(crate) fn term_is_zero(val: f64, lb: f64, ub: f64, epsilon: f64) -> bool {
+    let a = val.abs();
+    a <= f64::MIN_POSITIVE || (a <= epsilon && a * max2(lb.abs(), ub.abs()) <= epsilon)
+}
+
 #[inline(always)]
 pub(crate) fn bound_range(upper: f64, lower: f64, tolerance: f64, continuous: bool) -> f64 {
     let range = upper - lower;
@@ -999,12 +1013,20 @@ impl<'a> Bounds<'a> {
                 if self.col_upper[c] == INF {
                     return;
                 }
-                maxactivity += self.col_upper[c] * v;
+                if HIGHS_1_15 {
+                    maxactivity += self.col_upper[c] * v;
+                } else {
+                    maxactivity += CDouble::from(self.col_upper[c]) * v;
+                }
             } else {
                 if self.col_lower[c] == -INF {
                     return;
                 }
-                maxactivity += self.col_lower[c] * v;
+                if HIGHS_1_15 {
+                    maxactivity += self.col_lower[c] * v;
+                } else {
+                    maxactivity += CDouble::from(self.col_lower[c]) * v;
+                }
             }
         }
 

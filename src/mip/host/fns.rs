@@ -547,7 +547,7 @@ struct HelperData {
     host: P,
 }
 
-unsafe extern "C" fn helper_new(m: P, time_left: f64) -> P {
+unsafe extern "C" fn helper_new(m: P, time_left: f64, index: i32) -> P {
     let ms = ms_of(m);
     let mut o = ms.opts.clone();
     o.set("presolve", OptValue::Str(b"off"));
@@ -559,7 +559,8 @@ unsafe extern "C" fn helper_new(m: P, time_left: f64) -> P {
     o.mip_heuristic_run_root_reduced_cost = false;
     o.mip_heuristic_run_feasibility_jump = false;
     o.mip_concurrent_helper = false;
-    o.random_seed = ms.opts.random_seed + 1;
+    // each helper its own seed
+    o.random_seed = ms.opts.random_seed + 1 + index;
     o.time_limit = time_left;
     let data = HelperData { opts: o, model: ms.model().clone(), basis: ms.d().firstrootbasis.clone(), host: ms.host };
     Box::into_raw(Box::new(data)) as P

@@ -196,8 +196,8 @@ pub struct CMipFns {
     pub model_name: unsafe extern "C" fn(P, *mut i32) -> *const u8,
     pub max_submip_level: unsafe extern "C" fn(P) -> i32,
     /// the concurrent helper's options, model and root basis (with the
-    /// time left) for helper_run
-    pub helper_new: unsafe extern "C" fn(P, f64) -> P,
+    /// time left, the helper's index) for helper_run
+    pub helper_new: unsafe extern "C" fn(P, f64, i32) -> P,
     /// runs the helper's HighsMipSolver on the data of helper_new (which
     /// it frees) with the pool (concurrent.rs) in its own thread
     pub helper_run: unsafe extern "C" fn(P, *const c_void),
@@ -1036,8 +1036,8 @@ mod tests {
 }
 
 /// The concurrent helper's data (CMipFns::helper_new)
-pub fn fns_call_helper_new(m: &MipData, time_left: f64) -> P {
-    c!(helper_new, m.mipsolver, time_left)
+pub fn fns_call_helper_new(m: &MipData, time_left: f64, index: i32) -> P {
+    c!(helper_new, m.mipsolver, time_left, index)
 }
 
 /// A helper's root cut into the cut pool (CMipFns::add_root_cut)
