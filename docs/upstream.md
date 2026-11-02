@@ -46,7 +46,7 @@ Our own earlier fix (move every nonzero entry to the right-hand side)
 was stricter and cost about 1% of MIPLIB time; crest now uses the
 upstream version so that the oracle can follow HiGHS once it is released.
 
-## MIP: bounds and substitutions through tiny coefficients cut off feasible points
+## Draft, not filed: bounds and substitutions through tiny coefficients cut off feasible points
 
 **Version.** HiGHS 1.15.1 (`highs/mip/HighsDomain.cpp`,
 `highs/presolve/HPresolve.cpp`); the same code in Crestline, which gives
