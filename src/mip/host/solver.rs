@@ -290,7 +290,14 @@ impl MipSolver {
     /// getMaxNumWorkers
     pub fn get_max_num_workers(&self) -> i32 {
         let threads = crate::parallel::num_threads();
-        if threads == 1 || self.opts.parallel.as_slice() != b"on" || self.submip {
+        // "choose": the parallel tree search from 3 threads on (with 2,
+        // the second thread is the concurrent helper's)
+        let on = match self.opts.parallel.as_slice() {
+            b"on" => true,
+            b"choose" => threads >= 3,
+            _ => false,
+        };
+        if threads == 1 || !on || self.submip {
             return 1;
         }
         (1.7 * threads as f64).ceil() as i32

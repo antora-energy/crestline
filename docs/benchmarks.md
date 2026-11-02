@@ -81,7 +81,7 @@ only for one that passes the first:
 | Stage | Dispatch (bench-dispatch) | Standard (bench-std) | Cost |
 |---|---|---|---|
 | Screen | `screen` input, or a `bench-screen/*` branch: 10 instances (the three Lambda ticks, `hard_10-03_1340`, `diverse_10-01_0052` and the five `dm_*` models most sensitive to past changes), 8 seeds, 120 s, 8 runners per arch | `miplib-easy`, crest against main only | about 1/5 of a full run |
-| Full | all 25 instances, 16 seeds, 180 s, 16 runners per arch, 1 and 2 threads | `miplib` (240), plus `lp` for LP changes | |
+| Full | all instances, 16 seeds, 180 s, 16 runners per arch, 1 and 2 threads (and 4 for changes to threads >= 3) | `miplib` (240), plus `lp` for LP changes | |
 
 Before either, screen locally on a few models by instruction count
 (`CRESTLINE_INSTR_CLOCK`). A screen that shows no gain, or a loss on any
@@ -152,3 +152,68 @@ C++ app of the pinned fork does the same, the no_fma build ends
 "Optimal" like 1.15.1). Simplex: slowest
 are physiciansched3-3 and ns1760995 relaxations (time limit vs 250-260 s on
 arm64) and cod105 (1.1-1.4x).
+
+## Threads
+
+2026-11-02, the GitHub runners (4 vCPUs: arm64 Neoverse-N2, 4 cores; x64
+EPYC/Xeon, 2 cores with 2 hyperthreads each). SCIP runs its default,
+sequential (one thread whatever the setting), as reference.
+
+**MIPLIB 2017 benchmark** (240, 300 s; solved / sgm time, shift 10 s;
+runs 41313764455, 41351818355, 41351816521 with crest main)
+
+| solver | arm64 1 | arm64 2 | arm64 4 | x64 1 | x64 2 | x64 4 |
+|---|---|---|---|---|---|---|
+| crest main | 94 / 142.6 | 94 / 143.2 | 94 / 142.4 | 94 / 141.0 | 98 / 140.5 | 94 / 141.3 |
+| crest, 3+ thread changes below | | | **99 / 136.8** | | | **96 / 138.4** |
+| HiGHS 1.15.1 release | 82 / 151.6 | 82 / 151.1 | 82 / 150.4 | 87 / 151.7 | 89 / 150.4 | 86 / 150.2 |
+| HiGHS 1.15.1, crest's flags (`highs-src`) | | 89 / 149.5 | 88 / 148.8 | | 90 / 147.3 | 89 / 146.6 |
+| SCIP 10.0 (sequential) | 74 / 167.1 | | | 73 / 164.9 | | |
+
+Neither crest main nor HiGHS gets anything from more threads on MIPLIB:
+at the default gap (1e-4) there is no concurrent helper (it needs
+`mip_rel_gap >= 1e-3`), and the parallel tree search is off unless
+`parallel=on`; the threads only race IPX at the root and detect symmetry.
+Built with crest's flags (x86-64-v3 / LTO), HiGHS solves 1-7 more and is
+1-2.5% faster; crest stays ahead by 5-8 solved and 4-5% in time. The
+`highs-src` row at 1 thread was not run.
+
+**Dispatch** (all 36 instances, 8 seeds, 180 s, gap 1%; solved of 288 /
+sgm time, shift 1 s; runs 41314262664, 41314264650, 41314266781 with main)
+
+| crest | arm64 1 | arm64 2 | arm64 4 | x64 1 | x64 2 | x64 4 |
+|---|---|---|---|---|---|---|
+| main | 259 / 10.5 | 278 / 6.7 | 276 / 6.7 | 259 / 10.8 | 278 / 6.9 | 278 / 6.3 |
+| 3+ thread changes | (main's path) | (main's path) | **280 / 5.8** | (main's path) | (main's path) | 275 / 6.5 |
+
+Speedup 1 -> 2 -> 4 threads, main: 1.57x, then none (arm64); 1.58x, then
+noise (x64; the 2-thread and 4-thread rows of two runs differ by
+6.3-7.1 s). Threads 3 and 4 were idle.
+
+**From 3 threads on** (main since this section): a concurrent LNS helper
+on each thread but the main solver's, at most the physical cores less one,
+each with its own seed, sharing the incumbents and bounds of the one pool;
+and `parallel=choose` (the default) turns the parallel tree search on. With
+1 or 2 threads every path is main's (checked: equal logs at 1 thread, and
+with `mip_deterministic` at 2; paired against main at 2 threads, run
+41445118849: arm64 1.018 [0.996, 1.041], x64 1.004 [0.978, 1.031], the
+usual spread of two-thread timing). Paired against main at 4 threads (run
+41445115653, 288 pairs per arch, shifted time ratio, 95% interval):
+arm64 **0.879 [0.847, 0.912]**, solved 280 = 280; x64 1.013 [0.989,
+1.037], where the 2 physical cores leave one helper (main's helper count)
+and only the tree search is new. MIPLIB at 4 threads: +4 solved, sgm
+-4.1% (arm64) / -1.5% (x64), all from the tree search (run 41369267711).
+
+Rejected or not done:
+
+- Helpers on all logical CPUs: on the hyperthreaded x64 runners 3
+  helpers made the `dm_*` screen models 1.18-1.29x slower (time to 1%
+  1.19x; run 41315073863) while arm64 gained; hence the physical-core cap.
+- Helpers alone (no parallel tree search) at 4 threads: arm64 0.892
+  [0.861, 0.925] on dispatch (run 41369266138), nothing on MIPLIB; the
+  tree search adds MIPLIB's gain and does not cost dispatch (screen
+  41351769764: arm64 6.88 -> 6.85 s, x64 6.95 -> 7.08 s).
+- Diversifying the helpers beyond their seeds (move types, LNS vs deep
+  dive), a 3-way root race (dual, primal, IPX) and parallel strong
+  branching or separation: not tried; the measurements above show the
+  idle cores, not these, as the waste.
