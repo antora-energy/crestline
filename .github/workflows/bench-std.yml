@@ -55,10 +55,12 @@ jobs:
         run: |
           python3 - <<'EOF' >> "$GITHUB_OUTPUT"
           import json, os
-          runner = {'x64': 'ubuntu-24.04', 'arm64': 'ubuntu-24.04-arm'}
+          # ec2: arm64 builds on GitHub, runs on a self-hosted spot runner (bench/ec2_runner.sh)
+          runner = {'x64': 'ubuntu-24.04', 'arm64': 'ubuntu-24.04-arm', 'ec2': 'ubuntu-24.04-arm'}
+          run_on = dict(runner, ec2='crest-ec2')
           archs = [a.strip() for a in os.environ['ARCHS'].split(',') if a.strip()]
           print('archs=' + json.dumps([dict(arch=a, runner=runner[a]) for a in archs]))
-          print('runs=' + json.dumps([dict(arch=a, runner=runner[a], shard=k) for a in archs for k in range(int(os.environ['SHARDS']))]))
+          print('runs=' + json.dumps([dict(arch=a, runner=run_on[a], shard=k) for a in archs for k in range(int(os.environ['SHARDS']))]))
           EOF
           echo "highs=$(gh release view -R ERGO-Code/HiGHS --json tagName -q .tagName)" >> "$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"

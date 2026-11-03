@@ -63,7 +63,9 @@ jobs:
         run: |
           python3 - <<'EOF' >> "$GITHUB_OUTPUT"
           import json, os, re
-          runner = {'x64': 'ubuntu-24.04', 'arm64': 'ubuntu-24.04-arm'}
+          # ec2: arm64 builds on GitHub, runs on a self-hosted spot runner (bench/ec2_runner.sh)
+          runner = {'x64': 'ubuntu-24.04', 'arm64': 'ubuntu-24.04-arm', 'ec2': 'ubuntu-24.04-arm'}
+          run_on = dict(runner, ec2='crest-ec2')
           archs = [a.strip() for a in os.environ['ARCHS'].split(',') if a.strip()]
           refs, cfgs = {}, []
           for c in os.environ['CONFIGS'].split(';'):
@@ -75,7 +77,7 @@ jobs:
               refs[slug] = ref
               cfgs.append(','.join([f'{nm}=bins/{slug}/crest'] + opts.split()))
           print('builds=' + json.dumps([dict(arch=a, runner=runner[a], ref=r, slug=s) for a in archs for s, r in refs.items()]))
-          print('runs=' + json.dumps([dict(arch=a, runner=runner[a], shard=k) for a in archs for k in range(int(os.environ['SHARDS']))]))
+          print('runs=' + json.dumps([dict(arch=a, runner=run_on[a], shard=k) for a in archs for k in range(int(os.environ['SHARDS']))]))
           print('cfgs=' + ' '.join(cfgs))
           print('base=' + cfgs[0].split('=')[0])
           EOF
