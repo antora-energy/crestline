@@ -126,3 +126,25 @@ changed (its change stack grew, or it became infeasible) rather than
 whether the bound was accepted. The objective propagation is the only
 caller that reads the result, so runs that never meet such a no-op are
 unchanged.
+
+## Draft, not filed: the root node popped from a queue left without active nodes
+
+**Version.** HiGHS 1.15.1 (`HighsMipSolver::run`, the search loop).
+
+**Cause.** The loop checks `nodequeue.empty()` (no active node) at its
+top, then calls `queryExternalSolution` and, on its first pass
+(`root_node`), installs `nodequeue.popBestBoundNode()` unconditionally.
+An external solution taken there (`kCallbackMipUserSolution`) goes
+through `addIncumbent`: the new optimality limit and `performBounding`
+can move the only open node to the suboptimal set (its bound within the
+gap) or prune it. `popBestBoundNode` then unlinks `lowerMin`, -1: out of
+bounds. Only a user callback reaches it in HiGHS; we did not run it there.
+
+**What Crestline saw.** Its concurrent LNS helpers' solutions are taken at
+the same place (`sync_concurrent_lns`): from 3 threads on, 1 solve in
+64-128 of the dispatch model tick_1018_0420 ended in "pop from an empty
+node queue", the queue holding one suboptimal node.
+
+**Crestline's fix.** The root-node install checks the loop condition again
+and leaves the loop when no active node remains; every other run is
+unchanged.
