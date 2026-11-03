@@ -1263,18 +1263,21 @@ impl HFactor {
                 // 2.4.2. Elimination on the overlapping part
                 let mut n_fillin = mwz_column_count as i32;
                 let mut n_cancel = 0;
-                for my_k in my_start..my_end {
-                    let i_row = self.mc_index[my_k] as usize;
-                    let mut value = self.mc_value[my_k];
-                    if self.mwz_column_mark[i_row] != 0 {
-                        self.mwz_column_mark[i_row] = 0;
+                let mark = &mut self.mwz_column_mark[..num_row as usize];
+                let array = &self.mwz_column_array[..num_row as usize];
+                for (&i_row, value) in self.mc_index[my_start..my_end].iter().zip(&mut self.mc_value[my_start..my_end]) {
+                    // SAFETY: kernel row indices are below num_row (HFactor
+                    // invariant; mark and array have num_row entries)
+                    let m = unsafe { mark.get_unchecked_mut(i_row as usize) };
+                    if *m != 0 {
+                        *m = 0;
                         n_fillin -= 1;
-                        value = (-my_pivot).mul_add_c(self.mwz_column_array[i_row], value);
-                        if value.abs() < K_HIGHS_TINY {
-                            value = 0.0;
+                        let mut v = (-my_pivot).mul_add_c(unsafe { *array.get_unchecked(i_row as usize) }, *value);
+                        if v.abs() < K_HIGHS_TINY {
+                            v = 0.0;
                             n_cancel += 1;
                         }
-                        self.mc_value[my_k] = value;
+                        *value = v;
                     }
                 }
                 fake_eliminate += mwz_column_count as f64;
