@@ -1065,7 +1065,7 @@ and SCIP 10 (pyscipopt; logs and statistics).
 |---|---|---|---|---|
 | graph20-20-1rand | time limit | time limit | 5.9 s | symmetry: SCIP fixes 666 columns in presolve (packing orbitope 52 x 37, its triangle) and solves a 340-column model; crest found the orbitope but only fixed below branched rows |
 | neos-933966 (arm64) | time limit (120 s) | 33 s | | symmetry: packing orbitopes (as above) |
-| decomp2 | 37 s | 2.8 s | 3.1 s | seed luck: seeds 1-6 2.8-37 s (HiGHS 2.5-5.3 s); bound at the root, first good incumbent from a sub-MIP |
+| decomp2 | 37 s | 2.8 s | 3.1 s | seed luck: seeds 1-6 2.8-37 s (HiGHS 2.5-5.3 s); bound at the root, first good incumbent from a sub-MIP. Rechecked 2026-11-03 (seeds 0-7, M1): both solve 7 of 8 at the root; crest's seed 0 (the default) and HiGHS 1.15.1's seed 3 need 138 and 448 nodes; the root bound (-160, the optimum) is the same, only whether a root sub-MIP finds -160 differs |
 | neos-2978193-inde | 70 s | 18 s | time limit | seed luck: seeds 1-3 8-17 s (HiGHS 20-38 s) |
 | neos-873061 | time limit | 129 s | time limit | seed luck: seeds 1-3 solve in 129-198 s (HiGHS: 116 s, two time limits) |
 | neos-787933 | time limit | time limit | 1.7 s | presolve: SCIP's knapsack handler adds 61944 two-variable set partitioning rows and setppc aggregates them (1764 columns left; crest 63708) |
@@ -1088,9 +1088,10 @@ incompatible with root fixings). Sorting the columns of a submatrix of
 the orbitope is a valid reduction on its own. To fix early, symmetry
 detection is finished after the first root LP (it was finished after the
 root cut loop), so its task is now spawned after the analytic centre's.
-With more than one worker the detection runs on another thread and is
-finished where it was (after the root cut loop; syncing early would wait
-for it), and the triangle is fixed then. Off, crest is as HiGHS;
+In a main solver with a concurrent LNS helper (the dispatch models: more
+than one thread and `mip_rel_gap >= 1e-3`) the detection runs on another
+thread and is finished where it was (after the root cut loop; syncing
+early would wait for it), and the triangle is fixed then. Off, crest is as HiGHS;
 bench/quick_check.sh and perf.py set it off for the CI oracle.
 
 Local (M1, 120 s, 55 MIPLIB instances, seed 0): only instances with
@@ -1132,6 +1133,30 @@ two-thread runs schedule as main. Rerun after rebasing on main (run
 [1.000, 1.016] on both, the largest interval lambda wind185 1.015
 [1.005, 1.025] on x64; the dispatch orbitopes have no packing rows, so
 these two-thread differences are scheduling noise.
+
+**Early sync at 2+ threads without a helper (2026-11-03).** Until then
+the early sync was one-thread only, so any MIPLIB solve at 2+ threads
+(no helper at the default gap) fixed the triangle only after the root cut
+loop. neos-933966 solved at the root in 24 s at 1 thread but took 108
+nodes and 120-165 s at 2 and 4 threads and hit the limit at 3 and 8: the
+root sub-MIP finds the optimum (318) only once the triangle is fixed
+during the cut loop (without it, 328, then the tree). Now the late sync
+is kept only where a helper runs. bench-std MIPLIB, 2 threads, 300 s,
+main vs this (runs 41573824213, 41573825894): arm64 solved 94 -> 95, sgm
+144.8 -> 143.3 s; x64 94 -> 93, 144.5 -> 141.5 s; no wrong answer. Path
+changes (6 per arch) are those of the one-thread change: neos-933966
+122-167 s -> 24-32 s (1 node), neos-911970 9.4 -> 2.7-3.5 s, ns1208400
+53 -> 29 s, wachplan 240 -> 103-142 s, neos-873061 solved (162-186 s),
+nu25-pr12 faster; graph20-20-1rand slower (221 -> 264 s arm64, 184 s ->
+limit x64). The other x64 losses (neos-3004026-krka, neos-3216931-puriri)
+keep main's node counts on arm64 and ran on a slower EPYC 7763: CPU mix.
+bench-dispatch, 2 threads, 8 seeds, 180 s (run 41573822512): arm64 279 ->
+279, time 1.004, t1 1.001 [0.996, 1.006]; x64 280 -> 276, time 1.009, t1
+0.996 [0.990, 1.002], all four lost on diverse_10-01_0052, which runs the
+same code (the helper is on) and is timing noise at 2 threads: rerun
+with an A/A control (run 41608660717, 16 seeds, x64) head vs main 13 ->
+12 solved, 1.043 [0.828, 1.314]; main vs main 13 -> 12, 1.154 [0.862,
+1.545].
 
 ## Cheap B&B tweaks and implied integers from the literature survey (2026-10-18)
 

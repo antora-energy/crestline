@@ -194,6 +194,7 @@ On instances both solve, crest takes 0.875 (x64) / 0.894 (arm64) of HiGHS
 - against HiGHS 1.15.1: neos-2978193-inde (3-4x, both arches), decomp2
   (1.7-3.6x), neos-873061 (unsolved; HiGHS 133-155 s), neos-950242 (1.3-1.45x),
   and on arm64 only gmu-35-50 and neos-933966 (unsolved; HiGHS 16 s and 33 s);
+  (neos-933966 at 2+ threads: fixed 2026-11-03, see performance.md "Early sync")
 - against SCIP: neos-787933 and graph20-20-1rand (SCIP 2-6 s, crest
   unsolved), fhnw-binpack4-4 (infeasible; SCIP proves it in 12-17 s),
   CMS750_4, istanbul-no-cutoff, rocI-4-11, fast0507 (unsolved), decomp2,
