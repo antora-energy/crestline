@@ -561,6 +561,13 @@ unsafe fn search(m: *mut MipData) {
             // assign nodes to workers
             let mut limit_reached = false;
             if root_node {
+                // a concurrent helper's solution taken above can leave the
+                // root node suboptimal or pruned: nothing to install, done
+                // (the loop condition, checked again; C++ pops the empty
+                // queue)
+                if md.nodequeue().num_active_nodes() == 0 {
+                    break;
+                }
                 md.d(op::INSTALL_NODE, 0, 0.0);
             } else {
                 // installNodes
