@@ -266,11 +266,12 @@ impl MipData {
             // with static orbitopes the symmetries are synced first, so the
             // detection is spawned after the analytic centre (the task group
             // syncs its most recent task first)
-            // (on one thread only, and not in a concurrent LNS helper: on
-            // more, the detection runs on another thread, and an early sync
-            // would wait for it)
-            let early_symmetries =
-                o.mip_symmetry_static_orbitopes && !self.concurrent_helper && crate::parallel::num_threads() == 1;
+            // (not in a concurrent LNS helper, nor in a main solver that has
+            // one: there the detection runs on another thread, and an early
+            // sync waiting for it cost the dispatch models at two threads)
+            let early_symmetries = o.mip_symmetry_static_orbitopes
+                && !self.concurrent_helper
+                && (crate::parallel::num_threads() == 1 || !self.ob(op::USE_CONCURRENT_HELPER));
             if self.sc().detect_symmetries && !early_symmetries {
                 self.start(clk::START_SYMMETRY_DETECTION);
                 self.o(op::START_SYMMETRY_DETECTION);
