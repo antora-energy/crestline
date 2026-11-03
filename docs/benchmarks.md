@@ -73,6 +73,17 @@ Locally:
         --solvers crest=target/release/crest,highs=path/to/highs,scip --tl 60
     python3 bench/std.py report out.jsonl
 
+### More than 4 cores: spot EC2 (`archs=ec2`)
+
+GitHub's free runners have 4 vCPUs (2 physical cores on x64). For 8+
+threads, `bench/ec2_runner.sh up N` starts N spot Graviton instances
+(c8g.2xlarge: 8 cores, about $0.10/h in us-east-2) as one-job runners;
+then run bench-std or bench-dispatch with `archs=ec2` and `shards=N`.
+Builds stay on GitHub's arm64 runners. Each instance terminates after its
+job, and at most HOURS (6) after boot; `ls` and `down` list and terminate
+leftovers. A full MIPLIB run of three solvers at 8 threads is about 40
+instance-hours (about $4).
+
 ## Screen first, then the full run
 
 A candidate change goes through two stages, and the full benchmark runs

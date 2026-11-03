@@ -75,6 +75,9 @@ def run_one(cfg, inst, seed, a, cpu):
              status='hung' if hung else g(r'^  Status\s+(.*)$'), primal=num(g(r'^  Primal bound\s+(\S+)')), dual=num(g(r'^  Dual bound\s+(\S+)')),
              gap=num(gap), pdi=num(g(r'^  P-D integral\s+(\S+)')), time=num(g(r'^  Timing\s+(\S+)')),
              nodes=int(g(r'^  Nodes\s+(\d+)') or 0), lpit=int(g(r'^  LP iterations\s+(\d+)') or 0), traj=traj)
+    if r['status'] is None:
+        # a crash: the panic message, or the signal (code only, no model data)
+        print(f"{name(inst)} s{seed}: exit {p.returncode}\n" + '\n'.join(err.splitlines()[-5:]), file=sys.stderr, flush=True)
     if mac:
         r['instr'] = int(g(r'(\d+)\s+instructions retired', err) or 0)
         r['user'] = num(g(r'([\d.]+) user', err))
