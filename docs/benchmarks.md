@@ -292,3 +292,39 @@ Rejected or not done:
   dive), a 3-way root race (dual, primal, IPX) and parallel strong
   branching or separation: not tried; the measurements above show the
   idle cores, not these, as the waste.
+
+## Where crest trails HiGHS (2026-11-03)
+
+From the MIPLIB runs at 1-4 threads (41313764455, 41351818355, the
+3-thread run, 41351816521; shifted time ratio against `highs-src`, or
+the release at 1 thread), the instances crest loses on every arch and
+thread count, decomp2 and neos-933966 aside: tbfp-network 1.75 (the root
+sub-MIP finds 27.25 where HiGHS's finds the optimum), sct2 1.67 (x64; 3-7x
+the nodes), neos-3402294-bobin 1.67 (2-4 threads; one thread is 0.56-0.75),
+triptim1 1.57 (root only), neos-3083819-nubu 1.44, neos-873061 1.37,
+neos-950242 1.37 (crest's cut loop at the root after the early orbitope
+fixing), n5-3 1.31, 30n20b8 1.28, mzzv11 1.19, cod105 1.16, nw04 1.15.
+All but triptim1 and cod105 take other paths (nodes, root LP iterations,
+heuristic luck). LP set: supportcase12's relaxation runs 5x HiGHS's
+iterations at seed 0 (bitmap solve order; seeds 1-3 and `hyper_dfs` are
+even), triptim1's root LP twice HiGHS's (below).
+
+- **Factor build elimination over slices** (kept): HFactor's kernel
+  elimination loop indexed four arrays with a bounds check each; zipped
+  slices and unchecked marks, same arithmetic. cod105 relaxation (M1):
+  1.23x -> 1.01x HiGHS 1.15.1's cycles on its path, crest's own path
+  0.81 instructions; MIPLIB at 1 thread (run 41585275001 against
+  41602570525): solved 94 -> 95 (arm64), 93 -> 93 (x64), cod105 0.96
+  (arm64); dispatch at 2 threads (run 41585277141, 16 seeds): arm64
+  1.002, x64 1.003, solved 557 -> 557 / 554 -> 558.
+- **Root LP Devex switch only where the column FTRAN is sparse**
+  (rejected): on triptim1 the switch (`mip_root_lp_devex_density`) doubles
+  the root LP's iterations at every seed tried (147-161k against 70-74k);
+  the column FTRAN density there is 0.36 against the dispatch ramp and
+  lambda models' 0.02-0.08. Declining the switch once where it is over a
+  quarter of the DSE density: triptim1 0.61, but neos-3402294-bobin (where
+  the switch is crest's 1-thread win) went from 146-166 s to the time
+  limit, satellites2-60-fs and istanbul-no-cutoff slower; MIPLIB 1 thread
+  (run 41602573844) solved 94 -> 94 / 93 -> 92, both-solved 0.993 / 0.999;
+  dispatch 2 threads (run 41583812888) 0.994 / 1.000. The density at the
+  switch does not tell triptim1 from bobin.
