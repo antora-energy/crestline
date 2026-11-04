@@ -16,11 +16,52 @@ use std::collections::BTreeMap;
 #[derive(Default)]
 struct RowCache {
     version: u64,
+    unlinks: u64,
     positions: Vec<i32>,
     cols: Vec<i32>,
     vals: Vec<f64>,
     ints: Vec<u8>,
     sigs: Vec<(u32, u32)>,
+}
+
+/// See dom_hoist
+struct DomHoist {
+    int_c: u8,
+    sj_minus: u32,
+    sj_plus: u32,
+    ranged: bool,
+    flip: bool,
+    small: f64,
+    dominating_finite: bool,
+}
+
+impl DomHoist {
+    /// check_domination_non_zero
+    #[inline(always)]
+    fn non_zero(&self, mut aj: f64, mut ak: f64) -> bool {
+        if self.ranged {
+            return (aj - ak).abs() <= self.small;
+        }
+        if self.flip {
+            aj = -aj;
+            ak = -ak;
+        }
+        !(aj > ak + self.small)
+    }
+
+    /// checkDomination's tests before the cost and the columns, with
+    /// scalk = `scalk`: true if it returns false by them
+    #[inline(always)]
+    fn rejects(&self, scalk: i32, int_k: u8, sig_k: (u32, u32)) -> bool {
+        if self.int_c == INTEGER && int_k == CONTINUOUS {
+            return true;
+        }
+        let (mut sk_minus, mut sk_plus) = sig_k;
+        if scalk == -1 {
+            std::mem::swap(&mut sk_plus, &mut sk_minus);
+        }
+        (!self.sj_minus & sk_minus) != 0 || (self.sj_plus & !sk_plus) != 0
+    }
 }
 
 /// Counters of dominatedColumns
@@ -108,6 +149,26 @@ impl Presolve<'_> {
             }
         }
         true
+    }
+
+    /// The facts of dom_check_row's row and column that its fast path
+    /// reads (reread after any reduction)
+    fn dom_hoist(&self, ctx: &DomCtx, row: i32, col: i32, direction: i32) -> DomHoist {
+        let c = col as usize;
+        let (mut sj_minus, mut sj_plus) = ctx.signatures[c];
+        if direction == -1 {
+            std::mem::swap(&mut sj_plus, &mut sj_minus);
+        }
+        let dominating_bound = if direction > 0 { self.col_upper[c] } else { self.col_lower[c] };
+        DomHoist {
+            int_c: self.integrality[c],
+            sj_minus,
+            sj_plus,
+            ranged: self.is_ranged(row),
+            flip: self.row_upper[row as usize] == INF,
+            small: self.opt.small_matrix_value,
+            dominating_finite: direction as f64 * dominating_bound != INF,
+        }
     }
 
     fn dom_fix_col(&mut self, ctx: &mut DomCtx, col: i32, direction: i32) -> R {
@@ -265,6 +326,7 @@ impl Presolve<'_> {
         best_val: f64,
         bound_implied: bool,
         has_cliques: bool,
+        count_checks: bool,
     ) -> R {
         let version = self.matrix_version;
         let r = row as usize;
@@ -272,6 +334,35 @@ impl Presolve<'_> {
             ctx.row_cache.resize_with(r + 1, || RowCache { version: u64::MAX, ..Default::default() });
         }
         let mut e = std::mem::take(&mut ctx.row_cache[r]);
+        if e.version != version && e.version.wrapping_sub(e.unlinks) == version - self.matrix_unlinks {
+            // only unlinks since it was stored: the row's in-order positions
+            // are the stored ones less the unlinked (zero-valued) entries,
+            // if the row is shorter
+            if self.rowsize[r] as usize != e.positions.len() {
+                let mut n = 0;
+                for i in 0..e.positions.len() {
+                    if self.a_value[e.positions[i] as usize] != 0.0 {
+                        e.positions[n] = e.positions[i];
+                        e.cols[n] = e.cols[i];
+                        e.vals[n] = e.vals[i];
+                        e.ints[n] = e.ints[i];
+                        e.sigs[n] = e.sigs[i];
+                        n += 1;
+                    }
+                }
+                e.positions.truncate(n);
+                e.cols.truncate(n);
+                e.vals.truncate(n);
+                e.ints.truncate(n);
+                e.sigs.truncate(n);
+            }
+            e.version = version;
+            e.unlinks = self.matrix_unlinks;
+            debug_assert!({
+                self.store_row(row);
+                self.rowpositions[..self.rp_len] == e.positions[..]
+            });
+        }
         if e.version == version {
             // storeRow: the same positions
             let n = e.positions.len();
@@ -284,6 +375,7 @@ impl Presolve<'_> {
         } else {
             self.store_row(row);
             e.version = version;
+            e.unlinks = self.matrix_unlinks;
             e.positions.clear();
             e.positions.extend_from_slice(&self.rowpositions[..self.rp_len]);
             e.cols.clear();
@@ -306,37 +398,65 @@ impl Presolve<'_> {
         let c = col as usize;
         let d = direction as f64;
         let mut res = Ok(());
+        let implied_or_cliques = bound_implied || has_cliques;
+        let mut h = self.dom_hoist(ctx, row, col, direction);
+        let (cols, vals, ints, sigs) = (&e.cols[..n], &e.vals[..n], &e.ints[..n], &e.sigs[..n]);
         for kk in 0..n {
             let cached = self.matrix_version == version && self.rowpos_version == rowpos_version;
             let (k, ak, int_k, sig_k) = if cached {
-                (e.cols[kk], e.vals[kk], e.ints[kk], e.sigs[kk])
+                (cols[kk], vals[kk], ints[kk], sigs[kk])
             } else {
                 let p = self.rowpositions[kk] as usize;
                 let k = self.a_col[p];
                 (k, self.a_value[p], self.integrality[k as usize], ctx.signatures[k as usize])
             };
+            // checkDomination fails both ways by its first tests: then
+            // dom_check_cols makes no reduction and only counts its checks,
+            // which matter while allow_pred_bnd_analysis holds
+            let rejected = h.rejects(direction, int_k, sig_k) && h.rejects(-direction, int_k, sig_k);
+            if rejected && !count_checks {
+                continue;
+            }
             if k == col || self.col_deleted[k as usize] != 0 {
                 continue;
             }
             let ku = k as usize;
-            let same_var_type = (self.integrality[c] != CONTINUOUS && int_k != CONTINUOUS)
-                || (self.integrality[c] != INTEGER && int_k != INTEGER);
+            let same_var_type = (h.int_c != CONTINUOUS && int_k != CONTINUOUS)
+                || (h.int_c != INTEGER && int_k != INTEGER);
             if only_pred_bnd_analysis && !same_var_type {
                 continue;
             }
-            if self.check_domination_non_zero(row, d * best_val, d * ak) {
+            if rejected {
+                for m in [1, -1] {
+                    if !h.non_zero(d * best_val, m as f64 * d * ak) {
+                        continue;
+                    }
+                    // dom_check_cols' count
+                    let direction_k = m * direction;
+                    let dominated_bound = if direction_k > 0 { self.col_lower[ku] } else { self.col_upper[ku] };
+                    let is_dominated_bound_finite = direction_k as f64 * dominated_bound != -INF;
+                    let try_to_fix = is_dominated_bound_finite && implied_or_cliques;
+                    if !try_to_fix && (h.dominating_finite || is_dominated_bound_finite) && same_var_type {
+                        ctx.num_dom_checks_pred_bnd_analysis += 1;
+                    }
+                }
+                continue;
+            }
+            if h.non_zero(d * best_val, d * ak) {
                 res = self.dom_check_cols(ctx, col, k, direction, 1, bound_implied, has_cliques, same_var_type, int_k, sig_k);
                 if res.is_err() || self.col_deleted[c] != 0 {
                     break;
                 }
+                h = self.dom_hoist(ctx, row, col, direction);
             }
-            if self.col_deleted[ku] == 0 && self.check_domination_non_zero(row, d * best_val, -d * ak) {
+            if self.col_deleted[ku] == 0 && h.non_zero(d * best_val, -d * ak) {
                 // (after a reduction, column k's integrality as the C++ reads it)
                 let int_k = if self.matrix_version == version { int_k } else { self.integrality[ku] };
                 res = self.dom_check_cols(ctx, col, k, direction, -1, bound_implied, has_cliques, same_var_type, int_k, sig_k);
                 if res.is_err() || self.col_deleted[c] != 0 {
                     break;
                 }
+                h = self.dom_hoist(ctx, row, col, direction);
             }
         }
         ctx.row_cache[r] = e;
@@ -410,13 +530,13 @@ impl Presolve<'_> {
             let has_pos_cliques = self.is_binary(j) && self.cliquetable().num_cliques(CliqueVar::new(j, 1)) > 0;
 
             if best_row_minus != -1 && (allow_pred_bnd_analysis || lower_implied || has_neg_cliques) {
-                self.dom_check_row(&mut ctx, best_row_minus, j, -1, aj_best_row_minus, lower_implied, has_neg_cliques)?;
+                self.dom_check_row(&mut ctx, best_row_minus, j, -1, aj_best_row_minus, lower_implied, has_neg_cliques, allow_pred_bnd_analysis)?;
             }
             if self.col_deleted[ju] == 0
                 && best_row_plus != -1
                 && (allow_pred_bnd_analysis || upper_implied || has_pos_cliques)
             {
-                self.dom_check_row(&mut ctx, best_row_plus, j, 1, aj_best_row_plus, upper_implied, has_pos_cliques)?;
+                self.dom_check_row(&mut ctx, best_row_plus, j, 1, aj_best_row_plus, upper_implied, has_pos_cliques, allow_pred_bnd_analysis)?;
             }
 
             let avg_checks = ctx.num_dom_checks_pred_bnd_analysis / num_cols as usize;

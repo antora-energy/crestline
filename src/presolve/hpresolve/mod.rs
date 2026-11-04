@@ -476,6 +476,9 @@ pub struct Presolve<'h> {
     /// counts the changes of the matrix's positions, values and column
     /// integralities: a row's entries are unchanged while it is
     pub(crate) matrix_version: u64,
+    /// the part of matrix_version from unlink (an unlink zeroes the entry's
+    /// value and frees its position until a link, which counts as a change)
+    pub(crate) matrix_unlinks: u64,
     /// counts the stores into (and edits of) rowpositions
     pub(crate) rowpos_version: u64,
     pub(crate) freeslots: Vec<i32>,
@@ -884,6 +887,7 @@ impl Presolve<'_> {
 
     pub(crate) fn unlink(&mut self, pos: i32) {
         self.matrix_version += 1;
+        self.matrix_unlinks += 1;
         let p = pos as usize;
         let next = self.a_next[p];
         let prev = self.a_prev[p];

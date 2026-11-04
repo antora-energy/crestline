@@ -786,7 +786,10 @@ impl EkkView<'_> {
         from_index: usize,
         switch_density: f64,
     ) {
-        result.count = matrix::price_by_row_with_switch(
+        // SAFETY: the row-wise matrix's column indices are below num_col,
+        // the length of a row_ap array
+        debug_assert!(result.array.len() >= self.num_col);
+        result.count = unsafe { matrix::price_by_row_with_switch(
             self.ar_start,
             self.ar_p_end,
             self.ar_index,
@@ -800,7 +803,7 @@ impl EkkView<'_> {
             result.count as usize,
             result.array,
             result.index,
-        ) as i32;
+        ) } as i32;
     }
 
     /// HEkk::tableauRowPrice (double precision)
