@@ -336,6 +336,20 @@ unsafe fn entries<'a>(
     (index.get_unchecked(s..e), value.get_unchecked(s..e))
 }
 
+/// Position of `x` in `s` (it must be there): by blocks of 8 compared
+/// without branches, then the block's entries
+#[inline(always)]
+fn find_i32(s: &[i32], x: i32) -> usize {
+    let mut base = 0;
+    for c in s.chunks_exact(8) {
+        if c.iter().fold(false, |a, &v| a | (v == x)) {
+            break;
+        }
+        base += 8;
+    }
+    base + s[base..].iter().position(|&v| v == x).unwrap()
+}
+
 /// `x[j] -= m * v` (fused, as clang compiles it) for the entries `(j, v)`
 /// of a factor column
 ///
@@ -1220,18 +1234,25 @@ impl HFactor {
             // 2.2. Store active pivot column to L
             let start_a = self.mc_start[jp] as usize;
             let end_a = start_a + self.mc_count_a[jp] as usize;
-            let mut mwz_column_count = 0;
-            for k in start_a..end_a {
-                let i_row = self.mc_index[k];
-                let value = self.mc_value[k] / pivot_multiplier;
-                self.mwz_column_index[mwz_column_count] = i_row;
-                mwz_column_count += 1;
-                self.mwz_column_array[i_row as usize] = value;
-                self.mwz_column_mark[i_row as usize] = 1;
-                self.l_index.push(i_row);
+            let mwz_column_count = end_a - start_a;
+            let (col_index, col_value) = (&self.mc_index[start_a..end_a], &self.mc_value[start_a..end_a]);
+            self.mwz_column_index[..mwz_column_count].copy_from_slice(col_index);
+            self.l_index.extend_from_slice(col_index);
+            let mark = &mut self.mwz_column_mark[..num_row as usize];
+            let array = &mut self.mwz_column_array[..num_row as usize];
+            for (&i_row, &v) in col_index.iter().zip(col_value) {
+                let value = v / pivot_multiplier;
+                // SAFETY: kernel rows are below num_row (HFactor invariant)
+                unsafe {
+                    *array.get_unchecked_mut(i_row as usize) = value;
+                    *mark.get_unchecked_mut(i_row as usize) = 1;
+                }
                 self.l_value.push(value);
-                self.mr_count_before[i_row as usize] = self.mr_count[i_row as usize];
-                self.row_delete(j_col_pivot, i_row as usize);
+            }
+            for k in start_a..end_a {
+                let i_row = self.mc_index[k] as usize;
+                self.mr_count_before[i_row] = self.mr_count[i_row];
+                self.row_delete(j_col_pivot, i_row);
             }
             self.l_start.push(self.l_index.len() as i32);
             fake_fill += (2 * self.mc_count_a[jp]) as f64;
@@ -1239,10 +1260,8 @@ impl HFactor {
             // 2.3. Store non active pivot column to U
             let end_n = start_a + self.mc_space[jp] as usize;
             let start_n = end_n - self.mc_count_n[jp] as usize;
-            for i in start_n..end_n {
-                self.u_index.push(self.mc_index[i]);
-                self.u_value.push(self.mc_value[i]);
-            }
+            self.u_index.extend_from_slice(&self.mc_index[start_n..end_n]);
+            self.u_value.extend_from_slice(&self.mc_value[start_n..end_n]);
             self.u_pivot_index.push(i_row_pivot);
             self.u_pivot_value.push(pivot_multiplier);
             self.u_start.push(self.u_index.len() as i32);
@@ -1323,19 +1342,30 @@ impl HFactor {
                         self.mc_value.copy_within(p3..p4, p7);
                     }
 
-                    // 2.4.4.2 Fill into column copy
-                    for i in 0..mwz_column_count {
-                        let i_row = self.mwz_column_index[i];
-                        if self.mwz_column_mark[i_row as usize] != 0 {
-                            let v = -my_pivot * self.mwz_column_array[i_row as usize];
-                            self.col_insert(i_col, i_row, v);
-                        }
+                    // 2.4.4.2 Fill into column copy: the n_fillin rows
+                    // still marked, in the pivot column's order
+                    let mark = &self.mwz_column_mark[..num_row as usize];
+                    let array = &self.mwz_column_array[..num_row as usize];
+                    let iput = (self.mc_start[i_col] + self.mc_count_a[i_col]) as usize;
+                    let end = iput + n_fillin as usize;
+                    // SAFETY (here and below): pivot column rows are below
+                    // num_row (HFactor invariant)
+                    let fill = self.mwz_column_index[..mwz_column_count]
+                        .iter()
+                        .filter(|&&r| unsafe { *mark.get_unchecked(r as usize) } != 0);
+                    for ((index, value), &i_row) in
+                        self.mc_index[iput..end].iter_mut().zip(&mut self.mc_value[iput..end]).zip(fill)
+                    {
+                        *index = i_row;
+                        *value = -my_pivot * unsafe { *array.get_unchecked(i_row as usize) };
                     }
+                    self.mc_count_a[i_col] += n_fillin;
 
                     // 2.4.4.3 Fill into the row copy
                     for i in 0..mwz_column_count {
                         let i_row = self.mwz_column_index[i] as usize;
-                        if self.mwz_column_mark[i_row] != 0 {
+                        // SAFETY: pivot column rows are below num_row
+                        if unsafe { *self.mwz_column_mark.get_unchecked(i_row) } != 0 {
                             // Expand row space
                             if self.mr_count[i_row] == self.mr_space[i_row] {
                                 let p1 = self.mr_start[i_row] as usize;
@@ -1352,8 +1382,10 @@ impl HFactor {
                 }
 
                 // 2.4.5. Reset pivot column mark
-                for i in 0..mwz_column_count {
-                    self.mwz_column_mark[self.mwz_column_index[i] as usize] = 1;
+                let mark = &mut self.mwz_column_mark[..num_row as usize];
+                for &i_row in &self.mwz_column_index[..mwz_column_count] {
+                    // SAFETY: pivot column rows are below num_row
+                    unsafe { *mark.get_unchecked_mut(i_row as usize) = 1 };
                 }
 
                 // 2.4.6. Fix max value and link list
@@ -1365,8 +1397,10 @@ impl HFactor {
             }
 
             // 2.5. Clear pivot column buffer
-            for i in 0..mwz_column_count {
-                self.mwz_column_mark[self.mwz_column_index[i] as usize] = 0;
+            let mark = &mut self.mwz_column_mark[..num_row as usize];
+            for &i_row in &self.mwz_column_index[..mwz_column_count] {
+                // SAFETY: pivot column rows are below num_row
+                unsafe { *mark.get_unchecked_mut(i_row as usize) = 0 };
             }
 
             // 2.6. Correct row links for the remain active part
@@ -1810,22 +1844,32 @@ impl HFactor {
     fn col_fix_max(&mut self, i_col: usize) {
         let start = self.mc_start[i_col] as usize;
         let end = start + self.mc_count_a[i_col] as usize;
-        let mut max_value = 0.0;
-        for &v in &self.mc_value[start..end] {
-            max_value = cmax(max_value, v.abs());
+        // The running std::max from 0 of |v| is the largest |v| that is
+        // not NaN, whatever the order: so by 4 independent maxima
+        let values = &self.mc_value[start..end];
+        let mut m = [0.0; 4];
+        let mut blocks = values.chunks_exact(4);
+        for b in &mut blocks {
+            for i in 0..4 {
+                m[i] = cmax(m[i], b[i].abs());
+            }
         }
+        for &v in blocks.remainder() {
+            m[0] = cmax(m[0], v.abs());
+        }
+        let max_value = cmax(cmax(m[0], m[1]), cmax(m[2], m[3]));
         self.mc_min_pivot[i_col] = max_value * self.pivot_threshold;
     }
     fn col_delete(&mut self, i_col: usize, i_row: i32) -> f64 {
-        let mut idel = self.mc_start[i_col] as usize;
+        let start = self.mc_start[i_col] as usize;
         self.mc_count_a[i_col] -= 1;
-        let imov = idel + self.mc_count_a[i_col] as usize;
-        while self.mc_index[idel] != i_row {
-            idel += 1;
-        }
-        let pivot_multiplier = self.mc_value[idel];
-        self.mc_index[idel] = self.mc_index[imov];
-        self.mc_value[idel] = self.mc_value[imov];
+        let last = self.mc_count_a[i_col] as usize;
+        let (index, value) = (&mut self.mc_index[start..=start + last], &mut self.mc_value[start..=start + last]);
+        // The entry is in the column (the C++ searches without a bound)
+        let idel = find_i32(index, i_row);
+        let pivot_multiplier = value[idel];
+        index[idel] = index[last];
+        value[idel] = value[last];
         pivot_multiplier
     }
     fn row_insert(&mut self, i_col: i32, i_row: usize) {
@@ -1834,13 +1878,13 @@ impl HFactor {
         self.mr_index[iput] = i_col;
     }
     fn row_delete(&mut self, i_col: i32, i_row: usize) {
-        let mut idel = self.mr_start[i_row] as usize;
+        let start = self.mr_start[i_row] as usize;
         self.mr_count[i_row] -= 1;
-        let imov = idel + self.mr_count[i_row] as usize;
-        while self.mr_index[idel] != i_col {
-            idel += 1;
-        }
-        self.mr_index[idel] = self.mr_index[imov];
+        let last = self.mr_count[i_row] as usize;
+        let index = &mut self.mr_index[start..=start + last];
+        // The entry is in the row (the C++ searches without a bound)
+        let idel = find_i32(index, i_col);
+        index[idel] = index[last];
     }
     fn clink_add(&mut self, index: usize, count: i32) {
         let mover = self.col_link_first[count as usize];
@@ -2027,6 +2071,7 @@ impl HFactor {
         let n = self.u_pivot_index.len();
         assert!(array.len() >= num_row);
         assert!(self.u_pivot_value.len() >= n && start.len() >= n && end.len() >= n);
+        let rhs_index = &mut rhs.index[..num_row];
         let mut rhs_synthetic_tick = 0.0;
         let mut rhs_count = 0;
         for i_logic in order {
@@ -2045,7 +2090,9 @@ impl HFactor {
                 if pivot_multiplier.abs() > K_HIGHS_TINY {
                     pivot_multiplier /= *self.u_pivot_value.get_unchecked(i_logic);
                     *x = pivot_multiplier;
-                    rhs.index[rhs_count] = pivot_row;
+                    // (rhs_count < num_row: the pivot rows of U are distinct)
+                    debug_assert!(rhs_count < num_row);
+                    *rhs_index.get_unchecked_mut(rhs_count) = pivot_row;
                     rhs_count += 1;
                     let (s, e) = (*start.get_unchecked(i_logic), *end.get_unchecked(i_logic));
                     if i_logic >= num_row {

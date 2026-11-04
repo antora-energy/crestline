@@ -87,7 +87,10 @@ pub fn price_by_row_sparse(
 
 /// Row-wise PRICE into a dense result, from `from_index` of the column's
 /// nonzeros (the result is zeroed beforehand, or holds a partial PRICE).
-pub fn price_by_row_dense(
+///
+/// # Safety
+/// The column indices of the rows priced are below `result.len()`.
+pub unsafe fn price_by_row_dense(
     start: &[i32],
     end: &[i32],
     index: &[i32],
@@ -102,7 +105,9 @@ pub fn price_by_row_dense(
         let multiplier = column[row];
         let (from, to) = (start[row] as usize, end[row] as usize);
         for (&j, &a) in index[from..to].iter().zip(&value[from..to]) {
-            let x = &mut result[j as usize];
+            debug_assert!((j as usize) < result.len());
+            // SAFETY: j < result.len() (the caller's guarantee)
+            let x = unsafe { result.get_unchecked_mut(j as usize) };
             let value1 = multiplier.mul_add_c(a, *x);
             *x = if value1.abs() < K_HIGHS_TINY { K_HIGHS_ZERO } else { value1 };
         }
@@ -131,8 +136,11 @@ pub fn index_dense_result(result: &mut [f64], result_index: &mut [i32]) -> usize
 /// PRICE from `from_index` of the column's nonzeros, hyper-sparse if
 /// `hyper` until the result is too dense, then dense. `end` is p_end for a
 /// partitioned matrix. Returns the result count.
+///
+/// # Safety
+/// The column indices of the rows priced are below `result.len()`.
 #[allow(clippy::too_many_arguments)]
-pub fn price_by_row_with_switch(
+pub unsafe fn price_by_row_with_switch(
     start: &[i32],
     end: &[i32],
     index: &[i32],
@@ -154,7 +162,8 @@ pub fn price_by_row_with_switch(
             switch_density, result, result_index, &mut count);
     }
     if next < column_index.len() {
-        price_by_row_dense(start, end, index, value, column_index, column, next, result);
+        // SAFETY: the caller's guarantee
+        unsafe { price_by_row_dense(start, end, index, value, column_index, column, next, result) };
         count = index_dense_result(result, result_index);
     } else {
         // complete: remove small values (HVector::tight)
@@ -233,7 +242,8 @@ mod tests {
         let next = price_by_row_sparse(&rs, &rs[1..], &ri, &rv, 3, &[0, 1], &y, 0, f64::INFINITY,
             &mut b, &mut bi, &mut count);
         assert_eq!(next, 1); // the second row would fill the result
-        price_by_row_dense(&rs, &rs[1..], &ri, &rv, &[0, 1], &y, next, &mut b);
+        // SAFETY: the column indices are below 3
+        unsafe { price_by_row_dense(&rs, &rs[1..], &ri, &rv, &[0, 1], &y, next, &mut b) };
         assert_eq!(index_dense_result(&mut b, &mut bi), 3);
         assert_eq!(b, a);
     }
