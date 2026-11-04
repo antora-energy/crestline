@@ -541,9 +541,16 @@ impl<'a> Dual<'a> {
         // one, so count it towards the iteration limit. On a badly
         // conditioned infeasible LP whose dual objective climbs without
         // bound, the CHUZC of nearly every row fails, and the solve can
-        // otherwise spend minutes between iterations
-        if self.failed_proofs > 0
-            && x.iteration_count.get() as i64 + self.failed_proofs as i64 >= x.simplex_iteration_limit as i64
+        // otherwise spend minutes between iterations. Each can cost far
+        // more than an iteration (a CHUZC of thousands of passes over a
+        // dense row, each rejecting one pivot of a badly scaled row), so
+        // a hundred end a solve that has an iteration limit (on the
+        // dispatch suite no solve has more than 50; where a solve has
+        // thousands, it is an infeasible dive LP of graph LNS). A solve
+        // without one (the root LP) goes on: it can need hundreds
+        if (self.failed_proofs >= 100 && x.simplex_iteration_limit < i32::MAX)
+            || (self.failed_proofs > 0
+                && x.iteration_count.get() as i64 + self.failed_proofs as i64 >= x.simplex_iteration_limit as i64)
         {
             x.solve_bailout.set(true);
             x.model_status.set(MS_ITERATION_LIMIT);
@@ -1659,21 +1666,14 @@ impl<'a> Dual<'a> {
                     if chuzc_pass == 0 {
                         self.improve_choose_column_row();
                     } else {
-                        // Crestline: remove every packed value too small to
-                        // pass the growth test, not just the pivot (HiGHS
-                        // removes one per pass: on a row of thousands of
-                        // such values, as many passes over a dense row)
+                        // Remove the pivot
                         let pc = self.pack_count;
                         let (index, value) = (&mut self.row.pack_index, &mut self.row.pack_value);
-                        let mut k = 0;
-                        for i in 0..pc {
-                            if (row_ep_scale * value[i]).abs() > growth_tolerance && index[i] != self.work_pivot {
-                                index[k] = index[i];
-                                value[k] = value[i];
-                                k += 1;
-                            }
+                        if let Some(i) = index[..pc].iter().position(|&j| j == self.work_pivot) {
+                            index[i] = index[pc - 1];
+                            value[i] = value[pc - 1];
+                            self.pack_count -= 1;
                         }
-                        self.pack_count = k;
                     }
                     // Indicate that no pivot has been chosen
                     self.work_pivot = -1;
