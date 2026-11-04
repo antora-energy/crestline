@@ -329,3 +329,46 @@ even), triptim1's root LP twice HiGHS's (below).
   (run 41602573844) solved 94 -> 94 / 93 -> 92, both-solved 0.993 / 0.999;
   dispatch 2 threads (run 41583812888) 0.994 / 1.000. The density at the
   switch does not tell triptim1 from bobin.
+- **Root sub-MIP (tbfp-network, decomp2, neos-960392)** (no porting
+  divergence; robustness tweak rejected): the root RENS, `solveSubMip`
+  and their limits match HiGHS 1.15.1 line for line, and crest built with
+  the oracle features (`hyper_dfs highs_dual_proofs`, oracle options)
+  takes HiGHS's root path on tbfp-network to the same RENS sub-MIP (169
+  cuts, 57281 LP iterations), which finds the optimum 24.16 as HiGHS's
+  does. Default crest leaves that path at the first root LP (16670
+  against 19943 iterations) and its RENS finds 27.25. Seeds 0-3 at 1
+  thread (runs 41758882473, 41758888443, 41758894196, 41758900101):
+  tbfp-network crest 196 nodes at seed 0 but 0-1 node at seeds 1-3
+  (115-241 s), HiGHS 1.15.1 (`highs-src`) 9, 9-13, 1 and 105-150 nodes
+  (seed 3: time limit on x64); decomp2 crest 138 nodes at seed 0 only,
+  HiGHS 1 node at all four; neos-960392 1 node for both everywhere.
+  Seed 0 is crest's unlucky seed on both, not a port bug. A second root
+  RENS when the first improved the incumbent without closing the gap
+  (commit b2fb968, branch rens-retry): on decomp2 (M1, seeds 0-7) it
+  fires at seeds 0, 1, 5 and finds only one more unit each (-142 ->
+  -143, -138 -> -139, -135 -> -136); seeds 0 and 5 then solve faster
+  (198G -> 38G, 183G -> 77G instructions) on a changed path, seed 1
+  55G -> 58G; on tbfp-network it never fires (the first sub-MIP spends
+  the heuristic LP budget). MIPLIB 1 thread, the 61 x64 / 21 arm64
+  instances that ran before the run was cut short (run 41760495763
+  against 41758842359): solved 25 -> 25 / 6 -> 6, sgm 151.7 -> 157.6 /
+  138.8 -> 138.5, path changes both ways (neos-873061 204 -> 120 s,
+  neos5 87 -> 159 s, markshare_4_0, gmu-35-40 slower).
+- **Early symmetry sync only with orbitopes** (rejected): the early sync
+  (static orbitopes, no helper) installs the symmetries before the root
+  cut loop; generators without orbitopes then change the root path
+  (neos-960392 at 1 thread: 151G instructions and 18770 LP iterations
+  against 99G and 10921 with `mip_symmetry_static_orbitopes` off).
+  Using the early symmetries only when orbitopes were found (commit
+  22dfcff, branch early-sym-orbitopes): neos-960392 117G (the detection
+  is still paid), 15.3 -> 11.9 s (arm64), neos-933966 unchanged (1
+  node), neos-950242 unchanged (the same path with the option on or off
+  at seed 0). But the early generators are what three of PR #61's wins
+  came from: MIPLIB 1 thread (run 41758848594 against 41758842359)
+  arm64 solved 95 -> 95, sgm 141.5 -> 142.5: neos-873061 170 s -> time
+  limit, neos-911970 3.6 -> 9.5 s, ns1208400 29 -> 53 s (x64 the same
+  three; x64 95 -> 97 is fast0507, neos-3216931-puriri and
+  tbfp-network finishing inside the limit on faster CPUs, while arm64
+  keeps their paths). No cheap test
+  tells neos-960392 from those (set packing rows: 1660 of 4745 rows
+  there).
