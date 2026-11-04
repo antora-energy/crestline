@@ -260,6 +260,9 @@ pub struct Dual<'a> {
     computed_edge_weight: f64,
     num_devex_iterations: i32,
     new_devex_framework: bool,
+    /// Local iterations at the density switch to Devex (0: none); -1
+    /// once reverted to DSE
+    density_switch_iteration: i32,
     /// analysis_.num_correct_dual_primal_flip, for the rebuild
     num_correct_dual_primal_flip: i32,
     /// The last factor solve error, with the iteration count, update count,
@@ -337,6 +340,7 @@ impl<'a> Dual<'a> {
             computed_edge_weight: 0.0,
             num_devex_iterations: 0,
             new_devex_framework: false,
+            density_switch_iteration: 0,
             num_correct_dual_primal_flip: 0,
             solve_error: None,
             lp_dual_infeasibility: Infeasibility::default(),
@@ -1337,9 +1341,20 @@ impl<'a> Dual<'a> {
             self.record_analysis_data();
         }
         // Possibly switch from DSE to Devex
-        if self.edge_weight_mode == EW_DSE && self.switch_to_devex() {
+        if self.edge_weight_mode == EW_DSE && self.density_switch_iteration >= 0 && self.switch_to_devex() {
             self.edge_weight_mode = EW_DEVEX;
             self.initialise_devex_framework();
+        } else if self.edge_weight_mode == EW_DEVEX && self.density_switch_iteration > 0 {
+            // Crestline: back to DSE (from the Devex weights, as later
+            // solves start) once Devex has run as many iterations as there
+            // are rows. Where Devex pays (the dense B^-1 of dispatch
+            // models) the whole LP takes 0.5-1.2 iterations per row; where
+            // it does not (triptim1) Devex runs ten
+            let local_iteration_count = self.x.iteration_count.get() - self.x.control_iteration_count0;
+            if local_iteration_count - self.density_switch_iteration > self.num_row as i32 {
+                self.edge_weight_mode = EW_DSE;
+                self.density_switch_iteration = -1;
+            }
         }
     }
 
@@ -1359,6 +1374,7 @@ impl<'a> Dual<'a> {
         // dense, so the relative test below does not fire, but the DSE
         // FTRAN (on a dense row of B^-1) is the dearest of them
         if x.allow_dual_steepest_edge_to_devex_switch && row_dse_density > x.dse_to_devex_density {
+            self.density_switch_iteration = std::cmp::max(1, x.iteration_count.get() - x.control_iteration_count0);
             return true;
         }
         let costly_dse_measure_denominator =

@@ -372,3 +372,48 @@ even), triptim1's root LP twice HiGHS's (below).
   keeps their paths). No cheap test
   tells neos-960392 from those (set packing rows: 1660 of 4745 rows
   there).
+- **Root LP Devex switch: back to DSE after as many Devex iterations
+  as rows** (kept, PR devex-revert): the switch is not crest's
+  1-thread win on bobin at every seed (switch off fails only seed 0;
+  4 seeds x 2 archs, runs 41757368416: sgm 93 s 8/8 on, 165 s 6/8
+  off; satellites2-60-fs 268 s 5/8 on, 234 s 8/8 off), and Devex is
+  worse than DSE in bobin's root LP too (14k iterations against 523),
+  so a revert measured against DSE's rate before the switch also hits
+  bobin (3x the pre-switch iterations: bobin 93 -> 151 s, 8/8 -> 6/8,
+  run 41758466364). Per row it separates: dispatch root LPs take
+  0.5-1.2 iterations per row in all, triptim1's Devex ten. triptim1
+  root (M1, 1 thread) 939G -> 663G instructions (seed 1: 905G ->
+  599G); 4 seeds (run 41763339279) bobin 88 s 8/8, satellites2-60-fs
+  263 s 7/8. MIPLIB 1 thread (run 41769183228 against 41769176714):
+  the same path on every instance both solve except triptim1 (113 ->
+  81 s arm64, 137 -> 93 s x64); solved 95 -> 95 (arm64), 98 -> 94 (x64,
+  all near the limit on a slower runner: same-path time ratio 1.005);
+  LP set (41769202066 against 41769195808) the same path everywhere.
+  Dispatch 2 threads, 16 seeds (run 41769214331): arm64 t1 1.001
+  [0.999, 1.004], solved 558 -> 558; x64 0.999 [0.995, 1.002], 555 ->
+  556; the root LP traces of the dispatch models are unchanged (they
+  never revert). The per-instance t1 outliers (ovn_1148_g105 1.013,
+  dm_full_pert_s1_noramp 1.021) are inside a main-vs-main control's
+  spread (run 41799886659: up to 1.014, diverse solved 13 -> 12, 12 ->
+  10).
+- **Second cost perturbation on a dual degenerate stall** (rejected,
+  branch stall-reperturb): supportcase12's relaxation at seed 0 (409k
+  iterations, seeds 1-3 69-93k) is not numerical trouble or cycling:
+  88% of the dual steps are exactly zero (Harris ties within the dual
+  tolerance), pivots |alpha| >= 0.03, no trouble flagged; the dual
+  objective crawls (-14417 -> -14348 over 180k iterations) while basic
+  values grow to 1e10, and seed 1 has the same plateau (2e9) but
+  escapes sooner. The primal blow-up is a symptom, so a trigger on it
+  would fire on the good seeds too. Tried instead: after 2x rows phase 2
+  iterations without 0.1% dual objective progress, perturb the costs
+  again, 10x. supportcase12-relax seeds 0-3: 409k/93k/86k/69k ->
+  88k/76k/91k/90k iterations (run 41811161419); LP set (41769207971)
+  37 instances change path, those 0.87 (arm64) / 0.91 (x64), e.g.
+  neos-1354092 209 -> 19 s, mzzv11 31 -> 7 s, cygnet to optimal, but
+  rail01 57 s -> time limit (both archs) and kasavu (arm64); MIPLIB
+  (41769189285) 15 paths change, 1.01 / 1.02 net of runner speed,
+  wachplan and 30n20b8 solved -> time limit on both archs, ns1208400
+  29 -> 80 s, cod105 110 -> 150 s; dispatch neutral (it never fires
+  there). Perturbing 10x from the start (`dual_simplex_cost_perturbation_multiplier
+  = 10`) takes supportcase12 to 46-53k at all four seeds (run
+  41811157564) but changes every LP; not evaluated further.
