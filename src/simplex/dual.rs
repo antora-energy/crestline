@@ -22,7 +22,9 @@ use super::dual_rhs::{DualRhs, Primal};
 use super::ekk::{
     reinvert_on_numerical_trouble, sparse_loop_style, update_operation_result_density, EkkView, Infeasibility,
 };
-use super::hekk::{self, get_value_scale, Bailout, CHekk, LOG_DETAILED, LOG_ERROR, LOG_INFO, LOG_VERBOSE, LOG_WARNING};
+use super::hekk::{
+    self, get_value_scale, Bailout, CHekk, LOG_DETAILED, LOG_ERROR, LOG_INFO, LOG_VERBOSE, LOG_WARNING, MS_ITERATION_LIMIT,
+};
 use crate::hvector::{HVec, OwnedHVec};
 use crate::matrix;
 use crate::sprintf;
@@ -236,6 +238,8 @@ pub struct Dual<'a> {
     work_row: OwnedHVec,
     refactor_info_dirty: bool,
     bailout: Bailout,
+    /// failed proofs of primal infeasibility (see bailout)
+    failed_proofs: i32,
     num_row: usize,
     num_col: usize,
     num_tot: usize,
@@ -315,6 +319,7 @@ impl<'a> Dual<'a> {
             work_row: OwnedHVec::new(num_col as i32),
             refactor_info_dirty: true,
             bailout: Bailout::new(),
+            failed_proofs: 0,
             num_row,
             num_col,
             num_tot,
@@ -527,7 +532,23 @@ impl<'a> Dual<'a> {
 
     /// HEkk::bailout
     fn bailout(&mut self) -> bool {
-        self.bailout.check(self.x)
+        let x = self.x;
+        if self.bailout.check(x) {
+            return true;
+        }
+        // Crestline: a failed proof of primal infeasibility costs about
+        // an iteration (BTRAN, PRICE and the proof) without counting as
+        // one, so count it towards the iteration limit. On a badly
+        // conditioned infeasible LP whose dual objective climbs without
+        // bound, the CHUZC of nearly every row fails, and the solve can
+        // otherwise spend minutes between iterations
+        if self.failed_proofs > 0
+            && x.iteration_count.get() as i64 + self.failed_proofs as i64 >= x.simplex_iteration_limit as i64
+        {
+            x.solve_bailout.set(true);
+            x.model_status.set(MS_ITERATION_LIMIT);
+        }
+        x.solve_bailout.get()
     }
 
     // ---- HEkkDual ----
@@ -1638,14 +1659,21 @@ impl<'a> Dual<'a> {
                     if chuzc_pass == 0 {
                         self.improve_choose_column_row();
                     } else {
-                        // Remove the pivot
+                        // Crestline: remove every packed value too small to
+                        // pass the growth test, not just the pivot (HiGHS
+                        // removes one per pass: on a row of thousands of
+                        // such values, as many passes over a dense row)
                         let pc = self.pack_count;
                         let (index, value) = (&mut self.row.pack_index, &mut self.row.pack_value);
-                        if let Some(i) = index[..pc].iter().position(|&j| j == self.work_pivot) {
-                            index[i] = index[pc - 1];
-                            value[i] = value[pc - 1];
-                            self.pack_count -= 1;
+                        let mut k = 0;
+                        for i in 0..pc {
+                            if (row_ep_scale * value[i]).abs() > growth_tolerance && index[i] != self.work_pivot {
+                                index[k] = index[i];
+                                value[k] = value[i];
+                                k += 1;
+                            }
                         }
+                        self.pack_count = k;
                     }
                     // Indicate that no pivot has been chosen
                     self.work_pivot = -1;
@@ -2532,6 +2560,7 @@ impl<'a> Dual<'a> {
         } else {
             // No proof of primal infeasibility, so assume dual unbounded
             // claim is spurious. Make row_out taboo, and prevent rebuild
+            self.failed_proofs += 1;
             let (row_out, variable_out, variable_in) = (self.row_out, self.variable_out, self.variable_in);
             self.records().add_bad_basis_change(
                 row_out,
