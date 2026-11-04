@@ -709,6 +709,44 @@ or have no symmetry found (fhnw-binpack4-48) are not helped by this pass.
   the colour refinement leaves no cell of two or more columns and
   detection stops before searching (no log line). Proving infeasibility
   as SCIP does would need another technique, not a faster detection.
+## Hot loops over slices (2026-11-04)
+
+After the factor elimination loop (PR #62), the other hot loops of the LP
+relaxations and presolve, profiled with a SIGPROF PC sampler (line tables,
+inlined frames by `atos -i`). Same arithmetic: on 31 runs (LP relaxations,
+check/instances LPs, MIPLIB and dispatch MIPs at 200 nodes, one thread and
+two with `mip_deterministic`) every log is the same less time-triggered
+progress lines, and the presolved models of all 58 local MIPLIB and 36
+dispatch instances are identical byte for byte. Instructions retired (M1),
+each change against the build before it unless noted:
+
+| Loop | Change | Instructions |
+|---|---|---|
+| HFactor kernel: row/column delete search | blocks of 8 compared without branches, then the block (a plain `position` gained nothing) | cod105 relaxation 0.911 |
+| kernel 2.2: pivot column to L | slices, marks and values unchecked | 0.951 |
+| kernel 2.3: column to U | `extend_from_slice` | 0.998 |
+| kernel 2.4.4: fill-in into the column (and the row copy's mark) | the marked rows zipped into the column's free space | 0.966 |
+| kernel 2.4.5 / 2.5: mark reset and clear | unchecked over the pivot column's rows | 0.894 / 0.952 |
+| kernel 2.4.6: `col_fix_max` | four independent maxima (the running `std::max` from 0 of the abs values is the largest non-NaN one in any order) | cod105 0.946 |
+| dense row-wise PRICE | result scatter unchecked (`unsafe fn`: column indices below num_col) | rail507 0.954, dano3_3 0.962 |
+| U solve (FTRAN/BTRAN) | result index push unchecked | tick_1015 0.990, dano3_3 0.995 |
+| dominated columns | row cache kept across unlinks (the stored entries less the zeroed ones); entries `checkDomination` rejects both ways by integrality and signature only count its checks (and are skipped once `allow_pred_bnd_analysis` is off); row and column facts hoisted, reread after a reduction | nw04: the pass 154G -> 68.6G (0.445); presolve 0.696 (cycles 0.705) |
+
+(Kernel rows other than the delete search are left-one-out ratios, the
+inverse of the build without that change, on cod105's relaxation.)
+Totals against main: cod105 relaxation 0.721, MIP (200 nodes) 0.875 (2
+threads 0.843), rail507 relaxation 0.955 (MIP 0.962), dano3_3 0.949,
+ns1208400 0.970, the dispatch cases 0.957-1.006; nw04 presolve 0.696.
+
+Tried and dropped (no change in instructions): unchecked accesses in the
+FT update's FTRAN/BTRAN loops (0.999), forcing the kernel helpers inline.
+Not changed: the dense U and L solves (already unchecked, bound by
+gathers), dual CHUZR/CHUZC (another branch's work), clique merging in
+probing (nw04, mzzv11: hash-tree intersections, not bounds checks).
+
+Runners: bench-std miplib and lp (1 thread, x64 and arm64) against main
+and bench-dispatch at 2 threads were queued at the time of writing.
+
 ## IPX against the HiGHS 1.15.1 release (2026-10-17)
 
 bench-std's LP suite with `solver=ipm` (docs/benchmarks.md, run
