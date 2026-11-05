@@ -91,6 +91,11 @@ neos-5114902-kasavu and both proteindesign models. Use c8g.xlarge (8 GB)
 for MIPLIB. Spot capacity for one type can run out mid-launch
 (InsufficientInstanceCapacity); `up 1` again in a retry loop.
 
+Spot instances can also be reclaimed mid-run (12 of 32 c8g.2xlarge in one
+8-thread run). On the two-minute notice the run step stops and the shard
+uploads the results it has; rerun the instances still missing with `select`
+and report on the concatenated JSONL files.
+
 ## Screen first, then the full run
 
 A candidate change goes through two stages, and the full benchmark runs
