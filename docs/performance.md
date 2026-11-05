@@ -1770,6 +1770,67 @@ Best known (2 h reference runs): hard_10-03 -248499, diverse_10-01 -248178.
 Not taken further and nothing is built in. Rolling-horizon relax-and-fix,
 from the unit commitment literature, is the closest untried relative.
 
+## The MIP's LPs unscaled: `mip_lp_scaling` (default false; 2026-11-04)
+
+The new dispatch formulation variants of tick 1103_0404 (the "HTF"
+models, private) have many tiny coefficients, so their rows and columns
+range over 9-11 orders of magnitude. HiGHS's forced equilibration (`simplex_scale_strategy`
+choose) takes geometric means over those entries: column factors reach
+2^20, scaled costs 8.6e7, and the tiny entries become pivot candidates.
+On the LP relaxation of g03_eta1_L133 (M1, one thread, instructions):
+
+| scaling | iterations | instructions | rebuilds "possibly dual unbounded" |
+|---|---|---|---|
+| default (equilibration), seeds 0-3 | 47.6-56.3k | 227-264G | 926 (seed 0) |
+| none, seeds 0-3 | 25.3-27.4k | 43-81G | 2 |
+| equilibration ignoring entries below 1e-2 of the row/column max | 32.0k | 104G | 5 |
+| equilibration ignoring entries below 1e-3 absolute | 35.0k | 121G | 4 |
+| max-value scaling (strategy 4) | 30.4k | 93G | |
+| column factors capped by the bound range | 39.8-50.3k | 166-193G | |
+
+In the MIP the same scaling makes the bases of graph LNS dives near
+singular: pivot rows with entries up to 1e16, and CHUZC rejecting
+candidates on the growth test one per pass, up to 4400 passes over a pack
+of 10k entries per iteration (90% of the main thread in one 60 s profile).
+Unscaled, no CHUZC call takes a second pass.
+
+Unscaled is also the faster root LP on the other dispatch models
+(`solve_relaxation`, one thread, instructions unscaled/scaled): geometric
+mean about 0.82 over the 36 models of the private set, 0.50-1.23 per
+model; and 0.91 on 60 MIPLIB relaxations (mzzv11 0.24, dano3_3 0.50,
+neos-957323 2.26). The MIP's LP relaxation (its own handle, so the user's
+`simplex_scale_strategy` never reached it) is now unscaled when the
+MIP has at least 10000 rows as given, before presolve (the size of the
+root LP's Devex switch gate; all 36 dispatch models are above it,
+dm_small at 13.9k); below that, the two MIPLIB relaxations that lose most unscaled
+(neos-957323 2.26, 3757 rows: in the MIP 48 -> 58 s, 405G -> 592G, root
+LP 18.8k -> 48.5k iterations; neos-960392 1.38, 4744 rows) keep scaling,
+and so do the check instances of the CLI comparison. `mip_lp_scaling =
+true` restores HiGHS's scaling everywhere (the oracle sets it).
+
+HTF models, two threads, 1% gap, 180 s (M3 Pro, loaded; time to 2% / 1%,
+"-" = not reached):
+
+| model | seed | main | unscaled |
+|---|---|---|---|
+| g03_eta1_L133 | 0 | - / - (no incumbent) | 13.4 / 119.6 |
+| g03_eta1_L133 | 1 | 14.3 / 87.1 | 7.5 / 28.7 |
+| s1_heater | 0 | 69.6 / 180.0 | 12.1 / 85.5 |
+| s1_heater | 1 | 24.3 / 33.5 | 6.7 / 52.7 |
+| g03 | 0 | 180.0 / - (1.33%) | 13.0 / 132.2 |
+| g03 | 1 | 25.0 / - (1.13%) | 6.2 / 65.5 |
+| live | 0 | 7.2 / 26.3 | 8.0 / 19.3 |
+
+One thread, seed 0: first incumbent at 13.5-13.6 s on the three HTF
+models (main: none on g03_eta1_L133 and g03, 33 s on s1_heater), gap at
+180 s 1.30-1.35% (main: none, none, 1.86%); live 44 -> 52 s to 1%.
+
+Tried and dropped: CHUZC removing every candidate that fails the growth
+test at once (from the first or the eighth pass on) instead of one per
+pass. It removes the loops on the scaled LPs but changes the root LP's
+path for the worse (47.6k -> 58.0k iterations, seeds 1-3 268-274G against
+239-264G) and is moot once the LPs are unscaled.
+
 ## Other platforms
 
 - **gcc / libstdc++.** With the `libstdcxx` and `no_fma` features, Crestline
