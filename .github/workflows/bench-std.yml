@@ -138,6 +138,16 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           set -f  # SELECT holds globs
+          # spot reclaim: AWS gives 2 min notice; stop so the next step uploads what is done
+          # (rerun the rest with `select`, then report on the concatenated JSONL files)
+          if [ "$ARCH" = ec2 ]; then
+            ( while sleep 5; do
+                t=$(curl -sf -m 2 -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60') &&
+                  curl -sf -m 2 -H "X-aws-ec2-metadata-token: $t" http://169.254.169.254/latest/meta-data/spot/instance-action >/dev/null &&
+                  { echo "::warning::spot reclaim notice, stopping"; pkill -f bench/std.py; break; }
+              done ) &
+            trap "kill $! 2>/dev/null" EXIT
+          fi
           s=; for x in ${SOLVERS//,/ }; do
             case $x in crest*) s+=$x=bins/crest,;; highs-src) s+=highs-src=bins/highs-src,;; highs*) s+=$x=highs/bin/highs,;; *) s+=$x,;; esac
           done
