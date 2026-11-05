@@ -417,3 +417,20 @@ even), triptim1's root LP twice HiGHS's (below).
   there). Perturbing 10x from the start (`dual_simplex_cost_perturbation_multiplier
   = 10`) takes supportcase12 to 46-53k at all four seeds (run
   41811157564) but changes every LP; not evaluated further.
+- **The MIP's LPs unscaled from 10000 rows** (kept, PR mip-lp-unscaled,
+  `mip_lp_scaling`; docs/performance.md): rejected on the way there:
+  equilibration that ignores entries below 1e-2..1e-6 of their row or
+  column maximum, or below 1e-3..1e-7 absolute (HTF root LP 92-181G
+  against 227G scaled and 43-81G unscaled); max-value scaling (93G);
+  column factors capped so a bounded column keeps a scaled range of
+  1e-4..1 (166-193G); `allowed_matrix_scale_factor` 3-14 (92-225G);
+  dropping coefficients whose summed |a|(u-l) per row is below 1e-8..1e-6
+  with the row bounds relaxed to keep the model valid (199-267G; at 1e-8
+  the LP blew up); CHUZC dropping every growth-test failure at once from
+  the first or the eighth pass (root LP 47.6k -> 58.0k iterations at seed
+  0, 268-274G against 239-264G at seeds 1-3; moot unscaled, where no
+  CHUZC call takes a second pass); and no gate (all MIPs unscaled):
+  MIPLIB-easy 1 thread (run 41929828549) both-solved time 1.046 against
+  scaled, and a wrong dual bound on neos-911970 at seed 0 (55.52 against
+  the optimum 54.76; seeds 1-6 right; 107 rows, so the gate keeps it
+  scaled).
