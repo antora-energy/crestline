@@ -104,8 +104,8 @@ impl LpS {
         s.set_option("simplex_dse_exact_init_max_rows", OptValue::Int(20000));
         s.set_option("simplex_keep_random_vectors", OptValue::Bool(true));
         s.set_option("full_lp_kkt_check", OptValue::Bool(false));
-        // Crestline: the LPs of a MIP of at least 10000 rows are solved
-        // unscaled (mip_lp_scaling). Equilibration scales rows and columns
+        // Crestline: the LPs of a MIP of at least 10000 rows (as given,
+        // before presolve) are solved unscaled (mip_lp_scaling). Equilibration scales rows and columns
         // with many tiny coefficients (some dispatch models) up to where
         // the tiny entries make bases near singular (pivot rows of 1e16,
         // CHUZC passes by the thousand, 900 "possibly dual unbounded"
