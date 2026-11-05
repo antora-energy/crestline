@@ -13,6 +13,13 @@ const K_EQ: i8 = 0;
 const K_LEQ: i8 = 1;
 const MAX_PATH_LEN: usize = 6;
 const K_HIGHS_TINY: f64 = 1e-14;
+/// Crestline: the aggregated row entries a call may pass to the cut
+/// generator, per nonzero of the LP; a call that reaches it stops, and
+/// the separator stays off. On the dispatch suite a call passes at most
+/// 41 per nonzero; on dispatch models with dense coupling rows (heater to
+/// HTF credits) 190-250, about 4 s a call and nearly all of each root cut
+/// round, for dense path cuts that slow the LP and the search
+const WORK_PER_NONZERO: usize = 60;
 
 /// The separator's state across rounds: its random generator and work
 /// space
@@ -36,6 +43,9 @@ pub struct PathSeparator {
     is_integral: Vec<bool>,
     tmp_upper: Vec<f64>,
     tmp_solval: Vec<f64>,
+    /// set once a call reaches its work limit: the separator then stays
+    /// off
+    over_budget: bool,
 }
 
 /// Rows and their coefficients of the arcs of a column
@@ -67,10 +77,14 @@ impl PathSeparator {
             is_integral: Vec::new(),
             tmp_upper: Vec::new(),
             tmp_solval: Vec::new(),
+            over_budget: false,
         }
     }
 
     pub fn separate(&mut self, lp: &mut SepaRound, cutgen_seed: u32) {
+        if self.over_budget {
+            return;
+        }
         self.cutgen.reset(cutgen_seed, lp.feastol, lp.epsilon);
         let feastol = lp.feastol;
         let epsilon = lp.epsilon;
@@ -229,7 +243,13 @@ impl PathSeparator {
             w <= max_weight && w >= min_weight
         };
 
+        let max_work = WORK_PER_NONZERO * a_start[num_col] as usize;
+        let mut work = 0usize;
         for i in 0..num_row {
+            if work > max_work {
+                self.over_budget = true;
+                break;
+            }
             let scales: [f64; 2] = match rowtype[i] {
                 K_UNUSABLE => continue,
                 K_EQ => {
@@ -339,6 +359,9 @@ impl PathSeparator {
                     path_fractional = path_fractional || fractional;
 
                     let mut rhs = 0.0;
+                    if fractional {
+                        work += 2 * base_row_inds.len();
+                    }
                     success = fractional && cutgen.generate_cut(lp, base_row_inds, base_row_vals, &mut rhs, false);
 
                     lp.aggr_get(base_row_inds, base_row_vals, true);
