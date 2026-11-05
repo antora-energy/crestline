@@ -1799,8 +1799,13 @@ Unscaled is also the faster root LP on the other dispatch models
 mean about 0.82 over the 36 models of the private set, 0.50-1.23 per
 model; and 0.91 on 60 MIPLIB relaxations (mzzv11 0.24, dano3_3 0.50,
 neos-957323 2.26). The MIP's LP relaxation (its own handle, so the user's
-`simplex_scale_strategy` never reached it) is now unscaled;
-`mip_lp_scaling = true` restores HiGHS's scaling (the oracle sets it).
+`simplex_scale_strategy` never reached it) is now unscaled when the
+presolved MIP has at least 10000 rows (the gate of the root LP's Devex
+switch); below that, the two MIPLIB relaxations that lose most unscaled
+(neos-957323 2.26, 3106 rows: in the MIP 48 -> 58 s, 405G -> 592G, root
+LP 18.8k -> 48.5k iterations; neos-960392 1.38, 4229 rows) keep scaling,
+and so do the check instances of the CLI comparison. `mip_lp_scaling =
+true` restores HiGHS's scaling everywhere (the oracle sets it).
 
 HTF models, two threads, 1% gap, 180 s (M3 Pro, loaded; time to 2% / 1%,
 "-" = not reached):
