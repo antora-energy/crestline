@@ -98,6 +98,8 @@ struct GraphLns<'a> {
     flip_max_iters: i64,
     /// the dives' LP iteration budget (mip_graph_lns_deep_early; else none)
     dive_cap: i64,
+    /// the search's LP iteration budget
+    iter_cap: i64,
 }
 
 impl GraphLns<'_> {
@@ -107,7 +109,19 @@ impl GraphLns<'_> {
 
     fn solve(&self, dom: &Dom) -> i32 {
         self.lp.set_objective_limit(self.w.upper_limit());
-        self.lp.resolve(Some(dom))
+        self.resolve(Some(dom))
+    }
+
+    /// an LP solve within what is left of the search's LP iteration
+    /// budget, and at most a quarter of the first root LP's iterations (on
+    /// the dispatch suite no re-solve takes over 0.15 of them): a single
+    /// LP must not run past them (a dive's re-solve of a badly conditioned
+    /// infeasible LP otherwise ran for minutes)
+    fn resolve(&self, dom: Option<&Dom>) -> i32 {
+        let left = self.iter_cap - (self.lp.num_lp_iterations() - self.lp_iters_start);
+        let one = 1000i64.max(self.m.firstrootlpiters() / 4);
+        self.lp.set_iteration_limit(left.min(one).clamp(1, i32::MAX as i64) as i32);
+        self.lp.resolve(dom)
     }
 
     /// an LP solution with every integral column integral is a new
@@ -482,7 +496,7 @@ impl GraphLns<'_> {
             self.set_col(c, self.flipped(c as usize, gb));
         }
         self.lp.set_objective_limit(self.w.upper_limit());
-        let mst = self.lp.resolve(None);
+        let mst = self.resolve(None);
         *solves += 1;
         if usable(mst) && self.lp.objective() < self.w.upper_limit() && self.try_incumbent(mst) {
             self.drop_base();
@@ -527,7 +541,7 @@ impl GraphLns<'_> {
         }
         self.lp.set_objective_limit(INF);
         let mut solves = 1;
-        if !usable(self.lp.resolve(None)) {
+        if !usable(self.resolve(None)) {
             return solves;
         }
         self.screen.assign(&gd);
@@ -697,6 +711,7 @@ impl Heur {
             screened: 0,
             flip_max_iters: 5000i64.max(m.firstrootlpiters()),
             dive_cap: i64::MAX,
+            iter_cap: heur_iters_cap,
         };
         if m.opts.mip_graph_lns_deep_early {
             s.dive_cap = heur_iters_cap;

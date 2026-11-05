@@ -22,7 +22,9 @@ use super::dual_rhs::{DualRhs, Primal};
 use super::ekk::{
     reinvert_on_numerical_trouble, sparse_loop_style, update_operation_result_density, EkkView, Infeasibility,
 };
-use super::hekk::{self, get_value_scale, Bailout, CHekk, LOG_DETAILED, LOG_ERROR, LOG_INFO, LOG_VERBOSE, LOG_WARNING};
+use super::hekk::{
+    self, get_value_scale, Bailout, CHekk, LOG_DETAILED, LOG_ERROR, LOG_INFO, LOG_VERBOSE, LOG_WARNING, MS_ITERATION_LIMIT,
+};
 use crate::hvector::{HVec, OwnedHVec};
 use crate::matrix;
 use crate::sprintf;
@@ -236,6 +238,8 @@ pub struct Dual<'a> {
     work_row: OwnedHVec,
     refactor_info_dirty: bool,
     bailout: Bailout,
+    /// failed proofs of primal infeasibility (see bailout)
+    failed_proofs: i32,
     num_row: usize,
     num_col: usize,
     num_tot: usize,
@@ -315,6 +319,7 @@ impl<'a> Dual<'a> {
             work_row: OwnedHVec::new(num_col as i32),
             refactor_info_dirty: true,
             bailout: Bailout::new(),
+            failed_proofs: 0,
             num_row,
             num_col,
             num_tot,
@@ -527,7 +532,30 @@ impl<'a> Dual<'a> {
 
     /// HEkk::bailout
     fn bailout(&mut self) -> bool {
-        self.bailout.check(self.x)
+        let x = self.x;
+        if self.bailout.check(x) {
+            return true;
+        }
+        // Crestline: a failed proof of primal infeasibility costs about
+        // an iteration (BTRAN, PRICE and the proof) without counting as
+        // one, so count it towards the iteration limit. On a badly
+        // conditioned infeasible LP whose dual objective climbs without
+        // bound, the CHUZC of nearly every row fails, and the solve can
+        // otherwise spend minutes between iterations. Each can cost far
+        // more than an iteration (a CHUZC of thousands of passes over a
+        // dense row, each rejecting one pivot of a badly scaled row), so
+        // a hundred end a solve that has an iteration limit (on the
+        // dispatch suite no solve has more than 50; where a solve has
+        // thousands, it is an infeasible dive LP of graph LNS). A solve
+        // without one (the root LP) goes on: it can need hundreds
+        if (self.failed_proofs >= 100 && x.simplex_iteration_limit < i32::MAX)
+            || (self.failed_proofs > 0
+                && x.iteration_count.get() as i64 + self.failed_proofs as i64 >= x.simplex_iteration_limit as i64)
+        {
+            x.solve_bailout.set(true);
+            x.model_status.set(MS_ITERATION_LIMIT);
+        }
+        x.solve_bailout.get()
     }
 
     // ---- HEkkDual ----
@@ -2532,6 +2560,7 @@ impl<'a> Dual<'a> {
         } else {
             // No proof of primal infeasibility, so assume dual unbounded
             // claim is spurious. Make row_out taboo, and prevent rebuild
+            self.failed_proofs += 1;
             let (row_out, variable_out, variable_in) = (self.row_out, self.variable_out, self.variable_in);
             self.records().add_bad_basis_change(
                 row_out,
