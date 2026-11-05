@@ -84,6 +84,13 @@ job, and at most HOURS (6) after boot; `ls` and `down` list and terminate
 leftovers. A full MIPLIB run of three solvers at 8 threads is about 40
 instance-hours (about $4).
 
+For 1- and 2-thread runs, `up N c8g.large` (2 cores, about $0.02/h) is
+enough for dispatch, but not for MIPLIB: its 4 GB kills crest (exit -9,
+reported as `error`) on bab2, bab6, square47, savsched1, neos-3402454-bohle,
+neos-5114902-kasavu and both proteindesign models. Use c8g.xlarge (8 GB)
+for MIPLIB. Spot capacity for one type can run out mid-launch
+(InsufficientInstanceCapacity); `up 1` again in a retry loop.
+
 ## Screen first, then the full run
 
 A candidate change goes through two stages, and the full benchmark runs
