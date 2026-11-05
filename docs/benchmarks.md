@@ -447,3 +447,26 @@ even), triptim1's root LP twice HiGHS's (below).
   despite big wins (supportcase12-relax 236 -> 6 s, kasavu 280 -> 11 s,
   mzzv11 30 -> 7 s); supportcase42-relax's objective moves at the 2e-6
   level. The MIP gate above keeps scaling for pure LPs.
+- **Scaled fallback when the unscaled root LP runs away** (rejected, not
+  built): the idea was to start the MIP's first root LP unscaled and
+  re-solve it scaled past some multiple of the rows in iterations, to win
+  back uccase12 (MIPLIB 1 thread 23 -> 161 s with unscaled LPs; 2
+  threads 13 -> 103 s locally). Its in-MIP root LP iterations per
+  presolved row (main 2c6c50e, M1, 1 thread), unscaled against scaled:
+  uccase12 1.61 against 0.35 (142k iterations, 88k rows). But the
+  dispatch models reach 0.41-1.01 unscaled (ovn_* 0.80-0.91, dm_small
+  up to 1.01), the HTF models 0.63-0.73, and other MIPLIB models go
+  higher in both settings: satellites2-60-fs 1.10 unscaled against 5.03
+  scaled, physiciansched6-2 1.18 / 0.95, neos-933966 2.21 / 2.21,
+  triptim1 7.30 / 6.63, neos-5052403-cygnet 12.1 / 15.7. A threshold
+  that spares the dispatch models (above 1.01) fires on uccase12 only
+  after 89k or more of its 142k iterations, at most a quarter of the
+  waste saved, and it also fires on triptim1, cygnet and neos-933966,
+  where a scaled re-solve costs as much again for nothing. The largest
+  primal infeasibility sum during the unscaled solve does not separate
+  them either (uccase12 4e12, g03_eta1_L133 2.5e9, lambda_080458 5e8,
+  satellites2-60-fs 3e8). ovn_0716_g158 (1 thread t1 1.19 with unscaled
+  LPs, run 41960555578): the ovn ticks are the one dispatch family
+  whose root LP takes more iterations unscaled (0.80-0.91 against
+  0.61-0.75 per row) and unscaled LPs lose on pure-LP instructions on
+  two of the five (ovn_0636 1.06, ovn_0652 1.23).
