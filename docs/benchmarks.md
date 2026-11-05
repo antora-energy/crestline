@@ -434,3 +434,9 @@ even), triptim1's root LP twice HiGHS's (below).
   scaled, and a wrong dual bound on neos-911970 at seed 0 (55.52 against
   the optimum 54.76; seeds 1-6 right; 107 rows, so the gate keeps it
   scaled).
+- **Pure LPs unscaled** (`simplex_scale_strategy = 0` as the LP default;
+  rejected): LP set at 1 thread (run 41929832084, arm64) solved 232 -> 228
+  (one OOM kill), both-solved shifted time 1.030 in favour of scaling,
+  despite big wins (supportcase12-relax 236 -> 6 s, kasavu 280 -> 11 s,
+  mzzv11 30 -> 7 s); supportcase42-relax's objective moves at the 2e-6
+  level. The MIP gate above keeps scaling for pure LPs.
