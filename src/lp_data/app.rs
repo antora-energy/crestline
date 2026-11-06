@@ -143,9 +143,9 @@ impl App<'_> {
     fn load_options(&self, c: &CommandLine) -> bool {
         if c.version || c.notice {
             let mut s = Vec::new();
-            s.extend_from_slice(b"HiGHS version ");
+            s.extend_from_slice(concat!("Crestline ", env!("CARGO_PKG_VERSION"), " (Rust port of HiGHS ").as_bytes());
             s.extend(self.text(0));
-            s.extend_from_slice(b" Githash ");
+            s.extend_from_slice(b") Githash ");
             s.extend(self.text(1));
             s.extend_from_slice(b". ");
             s.extend(self.text(2));
