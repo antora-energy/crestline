@@ -1,0 +1,50 @@
+# Release: push a tag vX.Y.Z (matching Cargo.toml's version) to build static
+# Linux crest binaries and publish them as a GitHub release. x86_64 is built
+# for x86-64-v3 (AVX2, 2013+ CPUs), as benchmarked (bench-std.yml). Run by
+# hand (workflow_dispatch) to build the binaries without publishing.
+name: release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, target: x86_64-unknown-linux-gnu, cpu: '-C target-cpu=x86-64-v3' }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, cpu: '' }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - run: |
+          v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          [ "$GITHUB_REF_TYPE" != tag ] || [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != Cargo.toml version $v"; exit 1; }
+          # RUSTFLAGS replaces .cargo/config.toml's flags, so repeat them
+          export RUSTFLAGS="-C llvm-args=-unroll-runtime=false -C target-feature=+crt-static ${{ matrix.cpu }}"
+          cargo build --release --bin crest --target ${{ matrix.target }}
+          d=crest-v$v-${{ matrix.target }}
+          mkdir $d && cp target/${{ matrix.target }}/release/crest LICENSE THIRD_PARTY_NOTICES.md README.md $d/
+          ldd $d/crest 2>&1 | grep -q 'not a dynamic executable' && $d/crest --version
+          tar czf $d.tar.gz $d && sha256sum $d.tar.gz > $d.tar.gz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: crest-*.tar.gz*
+
+  release:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --generate-notes crest-*.tar.gz*
