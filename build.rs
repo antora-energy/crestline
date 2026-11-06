@@ -1,11 +1,12 @@
-//! The git hash of the logs' header and --version (`git describe
-//! --always`, as CMake's HIGHS_GITHASH; "n/a" outside a git checkout).
+//! The git hash of the logs' header and --version (`git rev-parse
+//! --short HEAD`, not `git describe`, which gives the tag once there is one;
+//! "n/a" outside a git checkout).
 //! Nothing is linked: crest and the library are all Rust.
 use std::process::Command;
 
 fn main() {
     let hash = Command::new("git")
-        .args(["describe", "--always"])
+        .args(["rev-parse", "--short", "HEAD"])
         .output()
         .ok()
         .filter(|o| o.status.success())
