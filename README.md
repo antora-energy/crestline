@@ -1,5 +1,8 @@
 # Crestline
 
+[![CI](https://github.com/asross/crestline/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/asross/crestline/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+
 This MIP solver is based heavily on [HiGHS](https://github.com/ERGO-Code/HiGHS) but ported to Rust and augmented with [graph-based Large Neighborhood Search](./docs/dispatch.md). It also includes a number of additional optimizations discussed [here](./docs/performance.md); standard benchmarks against HiGHS and SCIP are in [docs/benchmarks.md](./docs/benchmarks.md).
 
 As of this writing, it was programmed entirely by Claude Opus 5.5 with minimal guidance from me (@asross). My motivations in requesting it were:
@@ -8,6 +11,8 @@ As of this writing, it was programmed entirely by Claude Opus 5.5 with minimal g
 1. to close some of the performance gap between open-source and commercial solvers on such problems
 
 See below for instructions, additional details, and performance comparisons from Opus.
+
+**Contents:** [Build](#build) · [Usage](#usage) · [Status](#status) · [Verification](#verification) · [Benchmarks](./docs/benchmarks.md) · [Performance notes](./docs/performance.md) · [Dispatch and graph LNS](./docs/dispatch.md) · [Porting notes](./docs/porting.md)
 
 ## Build
 
