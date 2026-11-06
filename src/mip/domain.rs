@@ -405,15 +405,18 @@ macro_rules! domain_vecs {
         $m!(col_lower, col_upper, col_lower_pos, col_upper_pos, branch_pos, changedcolsflags, changedcols,
             domchgstack, domchgreason, prevboundval, activitymin, activitymax, activitymininf,
             activitymaxinf, capacity_threshold, propagateflags, propagateinds, scratch_counts,
-            scratch_inds, scratch_bounds)
+            scratch_inds)
     };
 }
 
 impl Clone for DomainVecs {
-    /// A copy of each vector (std::vector's copy)
+    /// A copy of each vector (std::vector's copy) but the bound changes'
+    /// scratch, which the C++ allocates in each propagate() call
     fn clone(&self) -> Self {
         macro_rules! cl {
-            ($($f:ident),*) => { DomainVecs { $($f: self.$f.to_owned_vec()),* } };
+            ($($f:ident),*) => {
+                DomainVecs { $($f: self.$f.to_owned_vec(),)* scratch_bounds: StdVec::from_vec(Vec::new()) }
+            };
         }
         domain_vecs!(cl)
     }
@@ -424,7 +427,7 @@ impl Drop for DomainVecs {
         macro_rules! dr {
             ($($f:ident),*) => {
                 // SAFETY: every vector is Rust-owned
-                unsafe { $(drop(self.$f.take_vec());)* }
+                unsafe { $(drop(self.$f.take_vec());)* drop(self.scratch_bounds.take_vec()) }
             };
         }
         domain_vecs!(dr)
@@ -2320,11 +2323,23 @@ impl Ctx {
             if !d.have_propagation_rows() {
                 return false;
             }
+            // zeroed, not filled: as with the C++'s new[] (in each call),
+            // only the pages propagation writes become resident
             let size = d.changed_bound_size();
             let mut b = d.scratch_bounds;
-            b.reserve(size, d.reserve_domchg);
-            let n = size.max(b.len());
-            b.set_len_filled(n, DomChg::default());
+            if b.len() < size {
+                let size = size.max(2 * b.len());
+                let layout = std::alloc::Layout::array::<DomChg>(size).unwrap();
+                // SAFETY: Rust-owned; all-zero bytes are a DomChg
+                unsafe {
+                    drop(b.take_vec());
+                    let p = std::alloc::alloc_zeroed(layout) as *mut DomChg;
+                    if p.is_null() {
+                        std::alloc::handle_alloc_error(layout);
+                    }
+                    *b = StdVec::from_vec(Vec::from_raw_parts(p, size, size));
+                }
+            }
         }
 
         while self.dom().have_propagation_rows() {
