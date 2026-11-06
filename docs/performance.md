@@ -1831,6 +1831,55 @@ pass. It removes the loops on the scaled LPs but changes the root LP's
 path for the worse (47.6k -> 58.0k iterations, seeds 1-3 268-274G against
 239-264G) and is moot once the LPs are unscaled.
 
+## Memory: the propagation scratch (2026-11-06)
+
+crest was killed (rc -9, out of memory) on rail507 and
+proteindesign121hz512p9 at 8 threads on 16 GB (c8g.2xlarge), and on bab2,
+bab6, square47, savsched1, neos-3402454-bohle, neos-5114902-kasavu and the
+proteindesign models at 1-2 threads on 4 GB (c8g.large). Measured on the
+M1 with `/usr/bin/time -l`'s peak memory footprint (macOS compresses
+memory, so the maximum resident set size understates it), heap by
+allocation site with `dhat`.
+
+- **Each domain kept a filled bound-change scratch.** propagate() writes
+  the bound changes of a batch of rows at fixed offsets of a scratch the
+  size of twice the model's nonzeros or of a cut pool's (up to ~100 MB on
+  rail507 and bab6). The C++ allocates it in each call, uninitialized, so
+  only the pages written become resident; crest kept one per domain,
+  filled, and the domain copies (one per tree search worker, search,
+  separation round, ...) copied it: 1.4 GB of 3.8 GB peak heap on bab6 at
+  one thread, 1.9 GB of 7.5 GB on rail507 at 8. Now domains are copied
+  without it and it is allocated zeroed (fresh pages), at least doubling
+  when it grows. Same paths and instruction counts (1 thread, air05,
+  mzzv11, neos-860300, pk1, seymour1, swath1, eil33-2, binkar10_1,
+  graph20-20-1rand, neos-1582420).
+- **What is left is the C++'s.** At 8 threads `parallel=choose` turns the
+  parallel tree search on (HiGHS 1.15.1 needs `parallel=on`): 13 worker
+  cut pools (up to ~200 MB each on rail507) and the open nodes' bound
+  changes grow with the tree. HiGHS 1.15.1 with `parallel=on` grows the
+  same way (below). At 1 thread crest's footprint is above HiGHS's on most
+  of these, but it is further along (cut rounds, nodes) at the same time;
+  bab6's 9.6k-cut root pool alone is 1.6 GB, as in the C++.
+
+Peak memory footprint, MB (300 s; before / after paired runs at the same
+time, the same paths at 1 thread; HiGHS 1.15.1 release separately):
+
+| instance | threads | crest before | crest after | HiGHS 1.15.1 |
+|---|---|---|---|---|
+| rail507 (3000 nodes) | 8 | 4908 | 4342 | 7089 (`parallel=on`, 3513 nodes, 900 s) |
+| proteindesign121hz512p9 | 8 | 11037 | 9308 | 2076; 9531 with `parallel=on` |
+| proteindesign121hz512p9 | 1 | 2628 | 2499 | 2331 |
+| bab2 | 1 | 3396 | 2738 | 1976 |
+| bab6 | 1 | 4463 | 3334 | 2339 |
+| neos-3402454-bohle | 1 | 7387 | 6389 | 4869 |
+| neos-5114902-kasavu | 1 | 4476 | 4372 | 3514 |
+| savsched1 | 1 | 2982 | 2855 | 1080 |
+| square47 | 1 | 4238 | 4267 | 2907 |
+
+So the 8-thread kills come from the parallel tree search, which HiGHS
+runs only when asked; capping it (workers, worker cut pools) would change
+the search and is not done here.
+
 ## Other platforms
 
 - **gcc / libstdc++.** With the `libstdcxx` and `no_fma` features, Crestline
