@@ -532,7 +532,8 @@ impl Highs {
         log_user!(
             log,
             LogType::Info,
-            "Running HiGHS %d.%d.%d%s: %s\n",
+            "Running Crestline %s (Rust port of HiGHS %d.%d.%d)%s: %s\n",
+            env!("CARGO_PKG_VERSION"),
             VERSION[0],
             VERSION[1],
             VERSION[2],

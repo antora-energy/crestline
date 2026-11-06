@@ -33,7 +33,7 @@ for f in $MIPLIB/{air05,neos17,nu25-pr12,neos-911970,gen-ip002}.mps.gz $DISPATCH
 done
 # The LP files (LPs, QPs, MIPs, semi-variables) and gzip-compressed
 # models, the whole output compared (times masked)
-mask() { sed -E 's/[0-9]+(\.[0-9]+)?(e[-+][0-9]+)?s( |$)/Ts\3/g; s/(hash: )[0-9a-f]+/\1H/; /[Tt]ime|Timing|integral|%\)|Total|^ +[0-9.]+ \(/{ s/[0-9][0-9.e+-]*/N/g; s/ +/ /g; }'; }
+mask() { sed -E 's/[0-9]+(\.[0-9]+)?(e[-+][0-9]+)?s( |$)/Ts\3/g; s/(hash: )[0-9a-f]+/\1H/; s/^Running Crestline [^ ]+ \(Rust port of HiGHS ([^)]+)\)/Running HiGHS \1/; /[Tt]ime|Timing|integral|%\)|Total|^ +[0-9.]+ \(/{ s/[0-9][0-9.e+-]*/N/g; s/ +/ /g; }'; }
 gzip -c $I/25fv47.mps > $tmp/25fv47.mps.gz
 gzip -c $I/qptestnw.lp > $tmp/qptestnw.lp.gz
 for f in $I/*.lp $tmp/25fv47.mps.gz $tmp/qptestnw.lp.gz; do

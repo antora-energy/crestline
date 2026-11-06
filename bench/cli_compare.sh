@@ -16,7 +16,7 @@ for b in "$@"; do BINS+=("$(ab "$b")"); done
 CPP=${BINS[0]}
 I=$ROOT/check/instances; C=$ROOT/check
 OUT=$(mktemp -d)
-mask() { sed -E '/^Strange: /d; s/[0-9]+(\.[0-9]+)?(e[-+][0-9]+)?s( |$)/Ts\3/g; s/(run time *: *).*/\1T/; s/(git hash: |Githash )[0-9a-f]+/\1H/; /[Tt]ime|Timing|^Thread |sub-solver|integral|^ +[0-9.]+ \(|%\)|Sub-MIP|simplex \(|IPX \(|Total|TOTAL|^MIP  /{ s/[0-9][0-9.e+-]*/N/g; s/ +/ /g; }'; }
+mask() { sed -E '/^Strange: /d; s/[0-9]+(\.[0-9]+)?(e[-+][0-9]+)?s( |$)/Ts\3/g; s/(run time *: *).*/\1T/; s/(git hash: |Githash )[0-9a-f]+/\1H/; s/^(Running )?Crestline [^ ]+ \(Rust port of HiGHS ([^)]+)\)/\1HiGHS \2/; s/^HiGHS ([0-9])/HiGHS version \1/; /[Tt]ime|Timing|^Thread |sub-solver|integral|^ +[0-9.]+ \(|%\)|Sub-MIP|simplex \(|IPX \(|Total|TOTAL|^MIP  /{ s/[0-9][0-9.e+-]*/N/g; s/ +/ /g; }'; }
 # $F: solution and basis files to read, written by the C++ app
 F=$OUT/files; mkdir -p "$F"
 (cd "$F"
